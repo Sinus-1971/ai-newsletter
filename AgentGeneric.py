@@ -639,16 +639,71 @@ def generate_html(all_results, subject, run_date, editorial_html=""):
     return html
 
 
-def send_email(html_content, subject, run_date):
+KNOWN_DOMAINS = [
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.co.jp",
+    "outlook.com", "hotmail.com", "live.com", "msn.com", "aol.com",
+    "icloud.com", "me.com", "mac.com", "mail.com", "protonmail.com",
+    "proton.me", "zoho.com", "yandex.com", "gmx.com", "gmx.net",
+    "fastmail.com", "tutanota.com", "hey.com", "pm.me",
+]
+
+
+def validate_email(email):
+    email = email.strip().lower()
+    if "@" not in email:
+        return None, "Missing '@' sign"
+    parts = email.split("@")
+    if len(parts) != 2:
+        return None, "Multiple '@' signs"
+    local, domain = parts
+    if not local:
+        return None, "No username before '@'"
+    if not domain:
+        return None, "No domain after '@'"
+    if "." not in domain:
+        return None, f"Invalid domain '{domain}' — missing top-level domain (e.g., .com)"
+    domain_parts = domain.split(".")
+    if any(len(p) == 0 for p in domain_parts):
+        return None, f"Invalid domain '{domain}' — empty segment"
+    if len(domain_parts[-1]) < 2:
+        return None, f"Invalid domain '{domain}' — top-level domain too short"
+    return email, None
+
+
+def collect_emails():
+    print("Enter recipient email addresses (up to 10). Press Enter with no input to finish.")
+    print()
+    emails = []
+    for i in range(1, 11):
+        raw = input(f"  Email {i}: ").strip()
+        if not raw:
+            break
+        email, error = validate_email(raw)
+        if error:
+            print(f"    [INVALID] {error}. Skipped.")
+            continue
+        if email in emails:
+            print(f"    [DUPLICATE] Already added. Skipped.")
+            continue
+        emails.append(email)
+        print(f"    [OK] {email}")
+    return emails
+
+
+def send_email(html_content, subject, run_date, recipients):
     app_password = os.environ.get("GMAIL_APP_PASSWORD")
     if not app_password:
         print("[ERROR] GMAIL_APP_PASSWORD environment variable not set.")
         return False
 
+    if not recipients:
+        print("[SKIP] No recipients — email not sent.")
+        return False
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"{subject} Daily Briefing - {run_date}"
     msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
+    msg["To"] = ", ".join(recipients)
 
     plain_text = f"{subject} Daily Briefing for {run_date}. Open in a browser for the full newsletter."
     msg.attach(MIMEText(plain_text, "plain"))
@@ -658,8 +713,8 @@ def send_email(html_content, subject, run_date):
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(EMAIL_FROM, app_password)
-            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-        print(f"Email sent to {EMAIL_TO}")
+            server.sendmail(EMAIL_FROM, recipients, msg.as_string())
+        print(f"Email sent to: {', '.join(recipients)}")
         return True
     except Exception as e:
         print(f"[ERROR] Failed to send email: {e}")
@@ -670,18 +725,59 @@ def sanitize_filename(subject):
     return re.sub(r"[^a-zA-Z0-9_-]", "_", subject).strip("_")
 
 
-def setup_cron(subject):
+def ask_schedule():
+    print("Would you like to schedule this newsletter periodically?")
+    choice = input("  (d)aily / (w)eekly / (n)o: ").strip().lower()
+
+    if choice in ("d", "daily"):
+        period = "daily"
+    elif choice in ("w", "weekly"):
+        period = "weekly"
+    else:
+        return None, None, None
+
+    while True:
+        time_str = input("  At what time? (HH:MM in 24h format, e.g. 08:00): ").strip()
+        match = re.match(r"^(\d{1,2}):(\d{2})$", time_str)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                break
+        print("    Invalid time. Please use HH:MM format (e.g., 08:00, 14:30)")
+
+    day_of_week = None
+    if period == "weekly":
+        days = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 0}
+        while True:
+            day_input = input("  Which day? (Mon/Tue/Wed/Thu/Fri/Sat/Sun): ").strip().lower()[:3]
+            if day_input in days:
+                day_of_week = days[day_input]
+                break
+            print("    Invalid day. Please enter e.g., Mon, Tue, Wed...")
+
+    return period, (hour, minute), day_of_week
+
+
+def setup_cron(subject, recipients, period, schedule_time, day_of_week=None):
     safe_name = sanitize_filename(subject)
     script_path = os.path.abspath(__file__)
     python_path = sys.executable
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"newsletter_{safe_name}.log")
+
+    hour, minute = schedule_time
+    recipients_arg = ",".join(recipients)
+
+    if period == "weekly" and day_of_week is not None:
+        cron_schedule = f"{minute} {hour} * * {day_of_week}"
+    else:
+        cron_schedule = f"{minute} {hour} * * *"
 
     cron_line = (
-        f'0 8 * * * export GMAIL_APP_PASSWORD="$(cat /Users/sinan/projects/Orchestrator/files2/.env '
-        f'| grep GMAIL_APP_PASSWORD | cut -d\\\" -f2)" && '
-        f'export ANTHROPIC_API_KEY="$(cat /Users/sinan/projects/Orchestrator/files2/.env '
-        f'| grep ANTHROPIC_API_KEY | cut -d\\\" -f2)" && '
-        f'{python_path} {script_path} --subject "{subject}" '
-        f'>> /Users/sinan/projects/Orchestrator/files2/newsletter_{safe_name}.log 2>&1'
+        f'{cron_schedule} cd {os.path.dirname(os.path.abspath(__file__))} && '
+        f'{python_path} {script_path} '
+        f'--subject "{subject}" --recipients "{recipients_arg}" '
+        f'>> {log_path} 2>&1'
     )
 
     try:
@@ -697,7 +793,13 @@ def setup_cron(subject):
 
         new_crontab = "\n".join(lines) + "\n"
         subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        print(f"Cron job added: daily at 8:00 AM for '{subject}'")
+
+        day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+        if period == "weekly":
+            schedule_desc = f"weekly on {day_names.get(day_of_week, '?')} at {hour:02d}:{minute:02d}"
+        else:
+            schedule_desc = f"daily at {hour:02d}:{minute:02d}"
+        print(f"Cron job added: {schedule_desc} for '{subject}'")
         return True
     except Exception as e:
         print(f"[ERROR] Failed to set up cron: {e}")
@@ -718,18 +820,46 @@ def list_scheduled_subjects():
         return []
 
 
+def print_summary(subject, recipients, period, schedule_time, day_of_week, total_articles):
+    day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+
+    print()
+    print("=" * 50)
+    print("  SUMMARY — Please review before proceeding")
+    print("=" * 50)
+    print()
+    print(f"  Subject:      {subject}")
+    print(f"  Articles:     {total_articles}")
+    print()
+    print(f"  Recipients:   ({len(recipients)})")
+    for email in recipients:
+        print(f"                  - {email}")
+    print()
+    if period:
+        hour, minute = schedule_time
+        if period == "weekly":
+            print(f"  Schedule:     Weekly on {day_names.get(day_of_week, '?')} at {hour:02d}:{minute:02d}")
+        else:
+            print(f"  Schedule:     Daily at {hour:02d}:{minute:02d}")
+        print(f"  First send:   NOW (test run)")
+    else:
+        print(f"  Schedule:     One-time send (no recurring schedule)")
+    print()
+    print("=" * 50)
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="AgentGeneric — Subject-based newsletter generator")
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
+    parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
-    parser.add_argument("--no-cron", action="store_true", help="Skip cron scheduling prompt")
     args = parser.parse_args()
 
-    if args.subject:
-        subject = args.subject
-    else:
+    is_interactive = args.subject is None
+
+    if is_interactive:
         print("=" * 50)
         print("  AgentGeneric — Newsletter Generator")
         print("=" * 50)
@@ -746,7 +876,21 @@ def main():
         if not subject:
             print("No subject provided. Exiting.")
             sys.exit(1)
+    else:
+        subject = args.subject
 
+    # Determine recipients
+    if args.recipients:
+        recipients = [e.strip() for e in args.recipients.split(",") if e.strip()]
+    elif is_interactive:
+        print()
+        recipients = collect_emails()
+        if not recipients:
+            print("  No valid emails entered. Newsletter will be saved but not emailed.")
+    else:
+        recipients = [EMAIL_TO]
+
+    # Fetch and generate
     run_date = datetime.now().strftime("%Y-%m-%d")
     safe_name = sanitize_filename(subject)
     filename = os.path.join(
@@ -777,18 +921,41 @@ def main():
     print(f"Newsletter saved: {filename}")
     print(f"Total articles: {total}")
 
-    if not args.no_email:
-        print()
-        send_email(html, subject, run_date)
+    # Non-interactive mode: just send and exit
+    if not is_interactive:
+        if not args.no_email and recipients:
+            print()
+            send_email(html, subject, run_date, recipients)
+        print("\nDone!")
+        return
 
-    if not args.no_cron and not args.subject:
+    # Interactive mode: ask about scheduling
+    period, schedule_time, day_of_week = None, None, None
+    if recipients:
         print()
-        schedule = input("Schedule this subject to run daily? (y/n): ").strip().lower()
-        if schedule in ("y", "yes"):
-            setup_cron(subject)
+        period, schedule_time, day_of_week = ask_schedule()
 
-    print()
-    print("Done!")
+    # Show summary and ask for confirmation
+    print_summary(subject, recipients, period, schedule_time, day_of_week, total)
+
+    confirm = input("  Proceed? (y/n): ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print("\n  Cancelled. Newsletter saved locally but not sent.")
+        print(f"  File: {filename}")
+        return
+
+    # Send email
+    if recipients:
+        print()
+        send_email(html, subject, run_date, recipients)
+
+    # Set up cron if periodic
+    if period and schedule_time and recipients:
+        print()
+        setup_cron(subject, recipients, period, schedule_time, day_of_week)
+        print("First email sent above as a test run.")
+
+    print("\nDone!")
 
 
 if __name__ == "__main__":
