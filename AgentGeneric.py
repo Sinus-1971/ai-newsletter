@@ -313,7 +313,7 @@ def deduplicate_articles(all_results):
     return all_results
 
 
-def generate_editorial(all_results, subject, run_date):
+def generate_editorial(all_results, subject, run_date, lang_name="English"):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("[WARNING] ANTHROPIC_API_KEY not set — skipping editorial summary.")
@@ -331,10 +331,13 @@ def generate_editorial(all_results, subject, run_date):
 
     articles_text = "\n".join(article_list)
 
+    lang_instruction = f"- Write entirely in {lang_name}" if lang_name != "English" else "- Write in English"
+
     prompt = f"""You are an expert analyst writing a daily newsletter editorial about "{subject}".
 Based on today's ({run_date}) articles below, write a 5-6 paragraph editorial summary.
 
 Rules:
+{lang_instruction}
 - Write in an engaging, professional journalistic tone
 - Identify the major themes and trends across all articles related to {subject}
 - Embed relevant article links naturally as HTML anchor tags: <a href="URL">descriptive text</a>
@@ -674,6 +677,48 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_file=
     return html
 
 
+LANGUAGES = {
+    "en": {"name": "English",    "voice": "Samantha", "code": "en"},
+    "fr": {"name": "French",     "voice": "Thomas",   "code": "fr"},
+    "de": {"name": "German",     "voice": "Anna",     "code": "de"},
+    "es": {"name": "Spanish",    "voice": "Mónica",   "code": "es"},
+    "it": {"name": "Italian",    "voice": "Alice",    "code": "it"},
+    "pt": {"name": "Portuguese", "voice": "Joana",    "code": "pt"},
+    "nl": {"name": "Dutch",      "voice": "Xander",   "code": "nl"},
+    "ru": {"name": "Russian",    "voice": "Milena",   "code": "ru"},
+    "tr": {"name": "Turkish",    "voice": "Yelda",    "code": "tr"},
+    "ja": {"name": "Japanese",   "voice": "Kyoko",    "code": "ja"},
+    "ko": {"name": "Korean",     "voice": "Yuna",     "code": "ko"},
+    "pl": {"name": "Polish",     "voice": "Zosia",    "code": "pl"},
+    "sv": {"name": "Swedish",    "voice": "Alva",     "code": "sv"},
+    "no": {"name": "Norwegian",  "voice": "Nora",     "code": "no"},
+    "da": {"name": "Danish",     "voice": "Sara",     "code": "da"},
+    "fi": {"name": "Finnish",    "voice": "Satu",     "code": "fi"},
+    "hi": {"name": "Hindi",      "voice": "Lekha",    "code": "hi"},
+}
+
+
+def ask_language():
+    print("Select language for editorial and audio:")
+    print()
+    langs = list(LANGUAGES.items())
+    per_row = 3
+    for i in range(0, len(langs), per_row):
+        row = langs[i:i + per_row]
+        cells = [f"  {code:4s} {info['name']:12s}" for code, info in row]
+        print("".join(cells))
+    print()
+    choice = input("  Language code (default: en): ").strip().lower()
+    if not choice:
+        choice = "en"
+    if choice not in LANGUAGES:
+        print(f"  '{choice}' not available. Using English.")
+        choice = "en"
+    lang = LANGUAGES[choice]
+    print(f"  Selected: {lang['name']} (voice: {lang['voice']})")
+    return lang
+
+
 KNOWN_DOMAINS = [
     "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.co.jp",
     "outlook.com", "hotmail.com", "live.com", "msn.com", "aol.com",
@@ -793,7 +838,7 @@ def ask_schedule():
     return period, (hour, minute), day_of_week
 
 
-def setup_cron(subject, recipients, period, schedule_time, day_of_week=None):
+def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lang_code="en"):
     safe_name = sanitize_filename(subject)
     script_path = os.path.abspath(__file__)
     python_path = sys.executable
@@ -811,7 +856,7 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None):
     cron_line = (
         f'{cron_schedule} cd {os.path.dirname(os.path.abspath(__file__))} && '
         f'{python_path} {script_path} '
-        f'--subject "{subject}" --recipients "{recipients_arg}" '
+        f'--subject "{subject}" --recipients "{recipients_arg}" --lang "{lang_code}" '
         f'>> {log_path} 2>&1'
     )
 
@@ -980,7 +1025,7 @@ def display_and_manage_jobs():
         return False
 
 
-def print_summary(subject, recipients, period, schedule_time, day_of_week, total_articles):
+def print_summary(subject, recipients, period, schedule_time, day_of_week, total_articles, lang_name="English"):
     day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
 
     print()
@@ -989,6 +1034,7 @@ def print_summary(subject, recipients, period, schedule_time, day_of_week, total
     print("=" * 50)
     print()
     print(f"  Subject:      {subject}")
+    print(f"  Language:     {lang_name}")
     print(f"  Articles:     {total_articles}")
     print()
     print(f"  Recipients:   ({len(recipients)})")
@@ -1014,6 +1060,7 @@ def main():
     parser = argparse.ArgumentParser(description="AgentGeneric — Subject-based newsletter generator")
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
     parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
+    parser.add_argument("--lang", type=str, default="en", help="Language code for editorial/audio (default: en)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     args = parser.parse_args()
 
@@ -1032,8 +1079,15 @@ def main():
         if not subject:
             print("No subject provided. Exiting.")
             sys.exit(1)
+
+        print()
+        lang = ask_language()
     else:
         subject = args.subject
+        lang = LANGUAGES.get(args.lang, LANGUAGES["en"])
+
+    lang_name = lang["name"]
+    voice = lang["voice"]
 
     # Determine recipients
     if args.recipients:
@@ -1065,14 +1119,14 @@ def main():
 
     print()
     print("Generating editorial summary...")
-    editorial_html = generate_editorial(all_results, subject, run_date)
+    editorial_html = generate_editorial(all_results, subject, run_date, lang_name)
 
     print("Generating audio narration...")
     audio_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         f"{safe_name}_{run_date}.m4a",
     )
-    audio_file = generate_audio(editorial_html, audio_path)
+    audio_file = generate_audio(editorial_html, audio_path, voice)
 
     print("Generating HTML newsletter...")
     html = generate_html(all_results, subject, run_date, editorial_html, audio_file)
@@ -1099,7 +1153,7 @@ def main():
         period, schedule_time, day_of_week = ask_schedule()
 
     # Show summary and ask for confirmation
-    print_summary(subject, recipients, period, schedule_time, day_of_week, total)
+    print_summary(subject, recipients, period, schedule_time, day_of_week, total, lang_name)
 
     confirm = input("  Proceed? (y/n): ").strip().lower()
     if confirm not in ("y", "yes"):
@@ -1115,7 +1169,8 @@ def main():
     # Set up cron if periodic
     if period and schedule_time and recipients:
         print()
-        setup_cron(subject, recipients, period, schedule_time, day_of_week)
+        lang_code = next((k for k, v in LANGUAGES.items() if v["name"] == lang_name), "en")
+        setup_cron(subject, recipients, period, schedule_time, day_of_week, lang_code)
         print("First email sent above as a test run.")
 
     print("\nDone!")
