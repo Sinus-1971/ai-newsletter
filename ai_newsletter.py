@@ -12,6 +12,7 @@ Setup:
 import feedparser
 import requests
 import anthropic
+from dotenv import load_dotenv
 from datetime import datetime, timezone
 from html import escape
 import re
@@ -21,6 +22,8 @@ import os
 import sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 EMAIL_FROM = "sinankezer@gmail.com"
 EMAIL_TO = "sinankezer@gmail.com"
