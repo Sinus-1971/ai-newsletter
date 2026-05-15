@@ -362,7 +362,35 @@ Articles:
         return ""
 
 
-def generate_html(all_results, subject, run_date, editorial_html=""):
+def generate_audio(editorial_html, output_path, voice="Samantha"):
+    if not editorial_html:
+        print("[SKIP] No editorial content — audio not generated.")
+        return None
+
+    plain_text = strip_html(editorial_html)
+    if not plain_text.strip():
+        return None
+
+    txt_path = output_path.replace(".aiff", ".txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(plain_text)
+
+    try:
+        subprocess.run(
+            ["say", "-v", voice, "-o", output_path, "-f", txt_path],
+            check=True, timeout=120,
+        )
+        os.remove(txt_path)
+        print(f"Audio saved: {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"[WARNING] Audio generation failed: {e}")
+        if os.path.exists(txt_path):
+            os.remove(txt_path)
+        return None
+
+
+def generate_html(all_results, subject, run_date, editorial_html="", audio_file=None):
     source_count = sum(1 for v in all_results.values() if v["articles"])
     article_count = sum(len(v["articles"]) for v in all_results.values())
 
@@ -487,6 +515,15 @@ def generate_html(all_results, subject, run_date, editorial_html=""):
 
         .editorial p:last-child {{
             margin-bottom: 0;
+        }}
+
+        .audio-player {{
+            margin-bottom: 18px;
+        }}
+
+        .audio-player audio {{
+            width: 100%;
+            border-radius: 8px;
         }}
 
         .editorial a {{
@@ -619,6 +656,7 @@ def generate_html(all_results, subject, run_date, editorial_html=""):
 
         {f'''<div class="editorial">
             <h2>Editorial Summary</h2>
+            {f'<div class="audio-player"><audio controls><source src="{os.path.basename(audio_file)}" type="audio/aiff">Your browser does not support audio.</audio></div>' if audio_file else ''}
             {editorial_html}
         </div>''' if editorial_html else ''}
 
@@ -1029,8 +1067,15 @@ def main():
     print("Generating editorial summary...")
     editorial_html = generate_editorial(all_results, subject, run_date)
 
+    print("Generating audio narration...")
+    audio_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        f"{safe_name}_{run_date}.aiff",
+    )
+    audio_file = generate_audio(editorial_html, audio_path)
+
     print("Generating HTML newsletter...")
-    html = generate_html(all_results, subject, run_date, editorial_html)
+    html = generate_html(all_results, subject, run_date, editorial_html, audio_file)
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
