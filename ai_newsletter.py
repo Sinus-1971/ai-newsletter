@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
 AI Newsletter Generator
-Fetches articles from 10 top AI news sources and generates an HTML newsletter.
-Sends the newsletter via email and saves as Sites_YYYY-MM-DD.html
+Fetches articles from 10 top AI news sources, generates an editorial summary
+via Claude API, and produces a styled HTML newsletter emailed daily.
 
 Setup:
   export GMAIL_APP_PASSWORD="your-app-password-here"
+  export ANTHROPIC_API_KEY="your-anthropic-api-key"
 """
 
 import feedparser
 import requests
+import anthropic
 from datetime import datetime, timezone
 from html import escape
 import re
@@ -186,7 +188,55 @@ def fetch_all_sources():
     return all_results
 
 
-def generate_html(all_results, run_date):
+def generate_editorial(all_results, run_date):
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("[WARNING] ANTHROPIC_API_KEY not set — skipping editorial summary.")
+        return ""
+
+    article_list = []
+    for source_name, data in all_results.items():
+        for art in data["articles"]:
+            article_list.append(
+                f"- [{art['title']}]({art['link']}) ({source_name}): {art['summary']}"
+            )
+
+    if not article_list:
+        return ""
+
+    articles_text = "\n".join(article_list)
+
+    prompt = f"""You are an expert AI industry analyst writing a daily newsletter editorial.
+Based on today's ({run_date}) AI news articles below, write a 5-6 paragraph editorial summary.
+
+Rules:
+- Write in an engaging, professional journalistic tone
+- Identify the major themes and trends across all articles
+- Embed relevant article links naturally as HTML anchor tags: <a href="URL">descriptive text</a>
+- Each paragraph should cover a distinct theme or storyline
+- Include at least 8-10 embedded links spread across the paragraphs
+- Do NOT use markdown — output raw HTML paragraphs wrapped in <p> tags
+- Do NOT include any heading tags — just the <p> paragraphs
+
+Articles:
+{articles_text}"""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        editorial_html = message.content[0].text
+        print("Editorial summary generated via Claude API")
+        return editorial_html
+    except Exception as e:
+        print(f"[WARNING] Failed to generate editorial: {e}")
+        return ""
+
+
+def generate_html(all_results, run_date, editorial_html=""):
     source_count = sum(1 for v in all_results.values() if v["articles"])
     article_count = sum(len(v["articles"]) for v in all_results.values())
 
@@ -285,6 +335,44 @@ def generate_html(all_results, run_date):
 
         header .stat strong {{
             color: #00d2ff;
+        }}
+
+        .editorial {{
+            background: linear-gradient(135deg, #1a1a2e 0%, #1e1e3a 100%);
+            border: 1px solid #3a3a5a;
+            border-radius: 12px;
+            padding: 30px 32px;
+            margin-bottom: 30px;
+        }}
+
+        .editorial h2 {{
+            font-size: 1.5em;
+            color: #00d2ff;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2a2a4a;
+        }}
+
+        .editorial p {{
+            margin-bottom: 14px;
+            color: #ccccdd;
+            font-size: 1em;
+            line-height: 1.75;
+        }}
+
+        .editorial p:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .editorial a {{
+            color: #7b9fff;
+            text-decoration: none;
+            border-bottom: 1px dotted #7b9fff;
+        }}
+
+        .editorial a:hover {{
+            color: #a0bfff;
+            border-bottom-color: #a0bfff;
         }}
 
         .source-section {{
@@ -404,6 +492,13 @@ def generate_html(all_results, run_date):
             </div>
         </header>
 
+        {f'''<div class="editorial">
+            <h2>Editorial Summary</h2>
+            {editorial_html}
+        </div>''' if editorial_html else ''}
+
+        <h2 style="color: #7b2ff7; margin-bottom: 20px; font-size: 1.4em;">All Articles by Source</h2>
+
         {sections_html}
 
         <footer>
@@ -456,8 +551,11 @@ def main():
     all_results = fetch_all_sources()
 
     print()
+    print("Generating editorial summary...")
+    editorial_html = generate_editorial(all_results, run_date)
+
     print("Generating HTML newsletter...")
-    html = generate_html(all_results, run_date)
+    html = generate_html(all_results, run_date, editorial_html)
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
