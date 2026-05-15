@@ -12,10 +12,13 @@ Sources with `filter_keywords` fetch a general feed and filter client-side. The 
 
 ## 2. AgentGeneric.py — Any-subject newsletter
 
-Prompts the user for a subject, dynamically builds sources (Google News, Google News recent, Reddit, Bing News, TechCrunch, The Verge, Ars Technica, Wired, Reuters via Google News, BBC via Google News), deduplicates articles, generates a Claude API editorial, and emails the newsletter. Output: `{Subject}_{YYYY-MM-DD}.html`.
+Prompts the user for a subject, uses Claude API to discover the 10 best authoritative sites for that subject, resolves their RSS feeds (with auto-discovery fallback), fetches articles, deduplicates, generates a Claude API editorial, and emails the newsletter. Output: `{Subject}_{YYYY-MM-DD}.html`.
 
 **Key differences from ai_newsletter.py:**
-- Dynamic source construction via `build_sources(subject)` using Google News RSS `q=` param
+- **AI-powered site discovery**: `discover_best_sites(subject)` calls Claude API to find the 10 best sites for any subject, returning name/domain/RSS URL/site URL
+- **RSS auto-discovery**: `discover_rss_for_site(domain)` tries common RSS patterns (`/feed/`, `/rss`, `/rss.xml`, etc.) when the AI-suggested URL fails
+- **3-tier source resolution**: (1) AI-suggested RSS URL, (2) pattern-based RSS discovery, (3) Google News `site:domain` filter as fallback
+- **Supplementary sources**: Google News general + recent, Reddit always appended alongside discovered sites
 - Reddit JSON API fetcher (`fetch_reddit`)
 - Cross-source deduplication (`deduplicate_articles`)
 - CLI argument support (`--subject`, `--no-email`, `--no-cron`) for non-interactive/cron use

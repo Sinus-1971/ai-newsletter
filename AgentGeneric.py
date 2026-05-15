@@ -16,6 +16,7 @@ import anthropic
 from datetime import datetime, timezone
 from html import escape
 from urllib.parse import quote_plus
+import json
 import re
 import time
 import smtplib
@@ -38,11 +39,126 @@ HEADERS = {
 
 MAX_ARTICLES_PER_SOURCE = 5
 
+RSS_PATTERNS = ["/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/feeds/posts/default"]
 
-def build_sources(subject):
-    """Build a list of RSS sources dynamically based on the subject."""
+
+def discover_best_sites(subject):
+    """Use Claude API to find the 10 best websites for a given subject."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("[WARNING] ANTHROPIC_API_KEY not set — using fallback sources.")
+        return None
+
+    prompt = f"""For the subject "{subject}", list the 10 best and most authoritative websites
+that regularly publish news, analysis, or research about this topic.
+
+Return ONLY a JSON array of objects with these fields:
+- "name": short display name of the site
+- "domain": the domain name (e.g., "techcrunch.com")
+- "rss_url": the RSS/Atom feed URL if you know it, otherwise null
+- "site_url": the main URL for the relevant section of the site
+
+Example format:
+[
+  {{"name": "TechCrunch", "domain": "techcrunch.com", "rss_url": "https://techcrunch.com/feed/", "site_url": "https://techcrunch.com/"}},
+  {{"name": "MIT Tech Review", "domain": "technologyreview.com", "rss_url": null, "site_url": "https://www.technologyreview.com/"}}
+]
+
+Return ONLY the JSON array, no other text."""
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            sites = json.loads(match.group())
+            print(f"Discovered {len(sites)} best sites for '{subject}'")
+            return sites
+    except Exception as e:
+        print(f"[WARNING] Site discovery failed: {e}")
+
+    return None
+
+
+def try_rss_url(url):
+    """Check if an RSS URL is reachable and returns a valid feed."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            feed = feedparser.parse(resp.content)
+            if feed.entries:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def discover_rss_for_site(domain):
+    """Try common RSS URL patterns for a domain."""
+    base = f"https://{domain}"
+    for pattern in RSS_PATTERNS:
+        url = base.rstrip("/") + pattern
+        if try_rss_url(url):
+            return url
+    base_www = f"https://www.{domain}"
+    for pattern in RSS_PATTERNS:
+        url = base_www.rstrip("/") + pattern
+        if try_rss_url(url):
+            return url
+    return None
+
+
+def build_sources(subject, discovered_sites=None):
+    """Build RSS sources from discovered sites, with Google News fallbacks."""
     encoded = quote_plus(subject)
-    return [
+    sources = []
+
+    if discovered_sites:
+        print()
+        print("Resolving RSS feeds for discovered sites...")
+        for site in discovered_sites[:10]:
+            name = site.get("name", site.get("domain", "Unknown"))
+            domain = site.get("domain", "")
+            rss_url = site.get("rss_url")
+            site_url = site.get("site_url", f"https://{domain}")
+
+            # Try the AI-suggested RSS URL first
+            if rss_url and try_rss_url(rss_url):
+                print(f"  {name}: direct RSS found")
+                sources.append({
+                    "name": name,
+                    "url": rss_url,
+                    "site_url": site_url,
+                })
+                continue
+
+            # Try common RSS patterns
+            found_rss = discover_rss_for_site(domain)
+            if found_rss:
+                print(f"  {name}: RSS discovered at {found_rss}")
+                sources.append({
+                    "name": name,
+                    "url": found_rss,
+                    "site_url": site_url,
+                    "filter_keywords": [kw.lower() for kw in subject.split()],
+                })
+                continue
+
+            # Fall back to Google News filtered to this site
+            print(f"  {name}: no RSS — using Google News site filter")
+            sources.append({
+                "name": name,
+                "url": f"https://news.google.com/rss/search?q={encoded}+site:{domain}&hl=en&gl=US&ceid=US:en",
+                "site_url": site_url,
+            })
+
+    # Always add Google News general + recent and Reddit as supplementary sources
+    sources.extend([
         {
             "name": f"Google News — {subject}",
             "url": f"https://news.google.com/rss/search?q={encoded}&hl=en&gl=US&ceid=US:en",
@@ -59,46 +175,9 @@ def build_sources(subject):
             "site_url": f"https://www.reddit.com/search/?q={encoded}",
             "type": "reddit",
         },
-        {
-            "name": f"Bing News — {subject}",
-            "url": f"https://www.bing.com/news/search?q={encoded}&format=rss",
-            "site_url": f"https://www.bing.com/news/search?q={encoded}",
-        },
-        {
-            "name": "TechCrunch",
-            "url": "https://techcrunch.com/feed/",
-            "site_url": "https://techcrunch.com/",
-            "filter_keywords": [kw.lower() for kw in subject.split()],
-        },
-        {
-            "name": "The Verge",
-            "url": "https://www.theverge.com/rss/index.xml",
-            "site_url": "https://www.theverge.com/",
-            "filter_keywords": [kw.lower() for kw in subject.split()],
-        },
-        {
-            "name": "Ars Technica",
-            "url": "https://arstechnica.com/feed/",
-            "site_url": "https://arstechnica.com/",
-            "filter_keywords": [kw.lower() for kw in subject.split()],
-        },
-        {
-            "name": "Wired",
-            "url": "https://www.wired.com/feed/rss",
-            "site_url": "https://www.wired.com/",
-            "filter_keywords": [kw.lower() for kw in subject.split()],
-        },
-        {
-            "name": "Reuters",
-            "url": f"https://news.google.com/rss/search?q={encoded}+site:reuters.com&hl=en&gl=US&ceid=US:en",
-            "site_url": "https://www.reuters.com/",
-        },
-        {
-            "name": "BBC News",
-            "url": f"https://news.google.com/rss/search?q={encoded}+site:bbc.com&hl=en&gl=US&ceid=US:en",
-            "site_url": "https://www.bbc.com/news",
-        },
-    ]
+    ])
+
+    return sources
 
 
 def strip_html(text):
@@ -196,7 +275,11 @@ def fetch_rss(source):
 
 
 def fetch_all_sources(subject):
-    sources = build_sources(subject)
+    print("Discovering best sites for this subject...")
+    discovered_sites = discover_best_sites(subject)
+    sources = build_sources(subject, discovered_sites)
+    print()
+
     all_results = {}
     for source in sources:
         print(f"Fetching: {source['name']}...")
