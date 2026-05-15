@@ -309,15 +309,12 @@ def generate_html(all_results, run_date, editorial_html=""):
 
         header h1 {{
             font-size: 2.4em;
-            background: linear-gradient(90deg, #00d2ff, #7b2ff7, #ff6b9d);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #40E0D0;
             margin-bottom: 8px;
         }}
 
         header .subtitle {{
-            color: #8888aa;
+            color: #80f0e0;
             font-size: 1.1em;
         }}
 
