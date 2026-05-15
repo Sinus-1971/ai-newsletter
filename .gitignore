@@ -1,5 +1,6 @@
 .env
-newsletter.log
+newsletter*.log
 Sites_*.html
+*_????-??-??.html
 __pycache__/
 *.pyc
