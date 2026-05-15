@@ -277,10 +277,56 @@ def fetch_rss(source):
     return articles
 
 
-def fetch_all_sources(subject):
-    print("Discovering best sites for this subject...")
-    discovered_sites = discover_best_sites(subject)
-    sources = build_sources(subject, discovered_sites)
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".source_cache")
+CACHE_MAX_AGE_DAYS = 7
+
+
+def get_cache_path(subject):
+    safe = sanitize_filename(subject)
+    return os.path.join(CACHE_DIR, f"{safe}_sources.json")
+
+
+def load_cached_sources(subject):
+    path = get_cache_path(subject)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            cache = json.load(f)
+        cached_date = datetime.strptime(cache["date"], "%Y-%m-%d")
+        age = (datetime.now() - cached_date).days
+        if age >= CACHE_MAX_AGE_DAYS:
+            print(f"Source cache expired ({age} days old) — rediscovering...")
+            return None
+        print(f"Using cached sources ({age} day(s) old, refreshes weekly)")
+        return cache["sources"]
+    except Exception:
+        return None
+
+
+def save_sources_cache(subject, sources):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    path = get_cache_path(subject)
+    cache = {
+        "subject": subject,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "sources": sources,
+    }
+    with open(path, "w") as f:
+        json.dump(cache, f, indent=2)
+    print(f"Sources cached to {path}")
+
+
+def fetch_all_sources(subject, refresh_sources=False):
+    cached = None if refresh_sources else load_cached_sources(subject)
+
+    if cached:
+        sources = cached
+    else:
+        print("Discovering best sites for this subject...")
+        discovered_sites = discover_best_sites(subject)
+        sources = build_sources(subject, discovered_sites)
+        save_sources_cache(subject, sources)
     print()
 
     all_results = {}
@@ -1061,6 +1107,7 @@ def main():
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
     parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
     parser.add_argument("--lang", type=str, default="en", help="Language code for editorial/audio (default: en)")
+    parser.add_argument("--refresh-sources", action="store_true", help="Force rediscovery of sources (ignore cache)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     args = parser.parse_args()
 
@@ -1114,7 +1161,7 @@ def main():
     print("-" * 50)
     print()
 
-    all_results = fetch_all_sources(subject)
+    all_results = fetch_all_sources(subject, refresh_sources=args.refresh_sources)
     all_results = deduplicate_articles(all_results)
 
     print()

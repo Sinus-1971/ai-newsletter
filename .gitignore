@@ -4,5 +4,6 @@ Sites_*.html
 *_????-??-??.html
 *.aiff
 *.m4a
+.source_cache/
 __pycache__/
 *.pyc
