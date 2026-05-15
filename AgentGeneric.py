@@ -27,7 +27,8 @@ import subprocess
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
 EMAIL_FROM = "sinankezer@gmail.com"
 EMAIL_TO = "sinankezer@gmail.com"
@@ -41,6 +42,15 @@ HEADERS = {
 }
 
 MAX_ARTICLES_PER_SOURCE = 5
+
+AUDIO_OPTIONS = {
+    "0": {"name": "No audio",  "voice": None,       "lang_name": None,      "code": "0"},
+    "1": {"name": "English",   "voice": "Samantha",  "lang_name": "English", "code": "1"},
+    "2": {"name": "Turkish",   "voice": "Yelda",     "lang_name": "Turkish", "code": "2"},
+    "3": {"name": "French",    "voice": "Thomas",    "lang_name": "French",  "code": "3"},
+}
+
+AUDIO_SPEED = 1.25
 
 RSS_PATTERNS = ["/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/feeds/posts/default"]
 
@@ -277,7 +287,7 @@ def fetch_rss(source):
     return articles
 
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".source_cache")
+CACHE_DIR = os.path.join(SCRIPT_DIR, ".source_cache")
 CACHE_MAX_AGE_DAYS = 7
 
 
@@ -411,7 +421,11 @@ Articles:
         return ""
 
 
-def generate_audio(editorial_html, output_path, voice="Samantha"):
+def generate_audio(editorial_html, output_path, voice=None, speed=AUDIO_SPEED):
+    if not voice:
+        print("[SKIP] Audio disabled.")
+        return None
+
     if not editorial_html:
         print("[SKIP] No editorial content — audio not generated.")
         return None
@@ -424,13 +438,15 @@ def generate_audio(editorial_html, output_path, voice="Samantha"):
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(plain_text)
 
+    rate = int(200 * speed)
+
     try:
         subprocess.run(
-            ["say", "-v", voice, "-o", output_path, "-f", txt_path],
-            check=True, timeout=120,
+            ["say", "-v", voice, "-r", str(rate), "-o", output_path, "-f", txt_path],
+            check=True, timeout=180,
         )
         os.remove(txt_path)
-        print(f"Audio saved: {output_path}")
+        print(f"Audio saved: {output_path} (speed: {speed}x)")
         return output_path
     except Exception as e:
         print(f"[WARNING] Audio generation failed: {e}")
@@ -723,46 +739,26 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_file=
     return html
 
 
-LANGUAGES = {
-    "en": {"name": "English",    "voice": "Samantha", "code": "en"},
-    "fr": {"name": "French",     "voice": "Thomas",   "code": "fr"},
-    "de": {"name": "German",     "voice": "Anna",     "code": "de"},
-    "es": {"name": "Spanish",    "voice": "Mónica",   "code": "es"},
-    "it": {"name": "Italian",    "voice": "Alice",    "code": "it"},
-    "pt": {"name": "Portuguese", "voice": "Joana",    "code": "pt"},
-    "nl": {"name": "Dutch",      "voice": "Xander",   "code": "nl"},
-    "ru": {"name": "Russian",    "voice": "Milena",   "code": "ru"},
-    "tr": {"name": "Turkish",    "voice": "Yelda",    "code": "tr"},
-    "ja": {"name": "Japanese",   "voice": "Kyoko",    "code": "ja"},
-    "ko": {"name": "Korean",     "voice": "Yuna",     "code": "ko"},
-    "pl": {"name": "Polish",     "voice": "Zosia",    "code": "pl"},
-    "sv": {"name": "Swedish",    "voice": "Alva",     "code": "sv"},
-    "no": {"name": "Norwegian",  "voice": "Nora",     "code": "no"},
-    "da": {"name": "Danish",     "voice": "Sara",     "code": "da"},
-    "fi": {"name": "Finnish",    "voice": "Satu",     "code": "fi"},
-    "hi": {"name": "Hindi",      "voice": "Lekha",    "code": "hi"},
-}
-
-
-def ask_language():
-    print("Select language for editorial and audio:")
+def ask_audio():
+    print("Audio for editorial narration:")
     print()
-    langs = list(LANGUAGES.items())
-    per_row = 3
-    for i in range(0, len(langs), per_row):
-        row = langs[i:i + per_row]
-        cells = [f"  {code:4s} {info['name']:12s}" for code, info in row]
-        print("".join(cells))
+    print("  0 — No audio")
+    print("  1 — English (default)")
+    print("  2 — Turkish")
+    print("  3 — French")
     print()
-    choice = input("  Language code (default: en): ").strip().lower()
+    choice = input("  Select (0-3, default: 1): ").strip()
     if not choice:
-        choice = "en"
-    if choice not in LANGUAGES:
-        print(f"  '{choice}' not available. Using English.")
-        choice = "en"
-    lang = LANGUAGES[choice]
-    print(f"  Selected: {lang['name']} (voice: {lang['voice']})")
-    return lang
+        choice = "1"
+    if choice not in AUDIO_OPTIONS:
+        print(f"  Invalid choice. Using English.")
+        choice = "1"
+    opt = AUDIO_OPTIONS[choice]
+    if opt["voice"]:
+        print(f"  Audio: {opt['name']} (voice: {opt['voice']}, speed: {AUDIO_SPEED}x)")
+    else:
+        print(f"  Audio: disabled")
+    return opt
 
 
 KNOWN_DOMAINS = [
@@ -888,8 +884,8 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lan
     safe_name = sanitize_filename(subject)
     script_path = os.path.abspath(__file__)
     python_path = sys.executable
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"newsletter_{safe_name}.log")
+    env_path = os.path.join(SCRIPT_DIR, ".env")
+    log_path = os.path.join(SCRIPT_DIR, f"newsletter_{safe_name}.log")
 
     hour, minute = schedule_time
     recipients_arg = ",".join(recipients)
@@ -900,7 +896,7 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lan
         cron_schedule = f"{minute} {hour} * * *"
 
     cron_line = (
-        f'{cron_schedule} cd {os.path.dirname(os.path.abspath(__file__))} && '
+        f'{cron_schedule} cd {SCRIPT_DIR} && '
         f'{python_path} {script_path} '
         f'--subject "{subject}" --recipients "{recipients_arg}" --lang "{lang_code}" '
         f'>> {log_path} 2>&1'
@@ -1106,7 +1102,7 @@ def main():
     parser = argparse.ArgumentParser(description="AgentGeneric — Subject-based newsletter generator")
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
     parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
-    parser.add_argument("--lang", type=str, default="en", help="Language code for editorial/audio (default: en)")
+    parser.add_argument("--lang", type=str, default="1", help="Audio option: 0=none, 1=English, 2=Turkish, 3=French")
     parser.add_argument("--refresh-sources", action="store_true", help="Force rediscovery of sources (ignore cache)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     args = parser.parse_args()
@@ -1128,13 +1124,13 @@ def main():
             sys.exit(1)
 
         print()
-        lang = ask_language()
+        audio_opt = ask_audio()
     else:
         subject = args.subject
-        lang = LANGUAGES.get(args.lang, LANGUAGES["en"])
+        audio_opt = AUDIO_OPTIONS.get(args.lang, AUDIO_OPTIONS["1"])
 
-    lang_name = lang["name"]
-    voice = lang["voice"]
+    lang_name = audio_opt["lang_name"] or "English"
+    voice = audio_opt["voice"]
 
     # Determine recipients
     if args.recipients:
@@ -1151,7 +1147,7 @@ def main():
     run_date = datetime.now().strftime("%Y-%m-%d")
     safe_name = sanitize_filename(subject)
     filename = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        SCRIPT_DIR,
         f"{safe_name}_{run_date}.html",
     )
 
@@ -1170,7 +1166,7 @@ def main():
 
     print("Generating audio narration...")
     audio_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        SCRIPT_DIR,
         f"{safe_name}_{run_date}.m4a",
     )
     audio_file = generate_audio(editorial_html, audio_path, voice)
@@ -1190,6 +1186,9 @@ def main():
         if not args.no_email and recipients:
             print()
             send_email(html, subject, run_date, recipients)
+            if audio_file and os.path.exists(audio_file):
+                os.remove(audio_file)
+                print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
         print("\nDone!")
         return
 
@@ -1212,12 +1211,14 @@ def main():
     if recipients:
         print()
         send_email(html, subject, run_date, recipients)
+        if audio_file and os.path.exists(audio_file):
+            os.remove(audio_file)
+            print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
 
     # Set up cron if periodic
     if period and schedule_time and recipients:
         print()
-        lang_code = next((k for k, v in LANGUAGES.items() if v["name"] == lang_name), "en")
-        setup_cron(subject, recipients, period, schedule_time, day_of_week, lang_code)
+        setup_cron(subject, recipients, period, schedule_time, day_of_week, audio_opt["code"])
         print("First email sent above as a test run.")
 
     print("\nDone!")

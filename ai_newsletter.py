@@ -23,7 +23,8 @@ import sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
 EMAIL_FROM = "sinankezer@gmail.com"
 EMAIL_TO = "sinankezer@gmail.com"
@@ -239,7 +240,7 @@ Articles:
         return ""
 
 
-def generate_audio(editorial_html, output_path, voice="Samantha"):
+def generate_audio(editorial_html, output_path, voice="Samantha", speed=1.25):
     if not editorial_html:
         print("[SKIP] No editorial content — audio not generated.")
         return None
@@ -252,14 +253,16 @@ def generate_audio(editorial_html, output_path, voice="Samantha"):
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(plain_text)
 
+    rate = int(200 * speed)
+
     try:
         import subprocess
         subprocess.run(
-            ["say", "-v", voice, "-o", output_path, "-f", txt_path],
-            check=True, timeout=120,
+            ["say", "-v", voice, "-r", str(rate), "-o", output_path, "-f", txt_path],
+            check=True, timeout=180,
         )
         os.remove(txt_path)
-        print(f"Audio saved: {output_path}")
+        print(f"Audio saved: {output_path} (speed: {speed}x)")
         return output_path
     except Exception as e:
         print(f"[WARNING] Audio generation failed: {e}")
@@ -580,7 +583,7 @@ def send_email(html_content, run_date):
 
 def main():
     run_date = datetime.now().strftime("%Y-%m-%d")
-    filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"Sites_{run_date}.html")
+    filename = os.path.join(SCRIPT_DIR, f"Sites_{run_date}.html")
 
     print("=" * 50)
     print(f"  AI Newsletter Generator - {run_date}")
@@ -594,7 +597,7 @@ def main():
     editorial_html = generate_editorial(all_results, run_date)
 
     print("Generating audio narration...")
-    audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"Sites_{run_date}.m4a")
+    audio_path = os.path.join(SCRIPT_DIR, f"Sites_{run_date}.m4a")
     audio_file = generate_audio(editorial_html, audio_path)
 
     print("Generating HTML newsletter...")
@@ -609,6 +612,10 @@ def main():
 
     print()
     send_email(html, run_date)
+
+    if audio_file and os.path.exists(audio_file):
+        os.remove(audio_file)
+        print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
 
     print("Done!")
 
