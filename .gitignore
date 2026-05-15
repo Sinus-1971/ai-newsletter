@@ -3,5 +3,6 @@ newsletter*.log
 Sites_*.html
 *_????-??-??.html
 *.aiff
+*.m4a
 __pycache__/
 *.pyc

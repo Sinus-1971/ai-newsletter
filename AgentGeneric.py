@@ -371,7 +371,7 @@ def generate_audio(editorial_html, output_path, voice="Samantha"):
     if not plain_text.strip():
         return None
 
-    txt_path = output_path.replace(".aiff", ".txt")
+    txt_path = output_path.replace(".m4a", ".txt")
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(plain_text)
 
@@ -656,7 +656,7 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_file=
 
         {f'''<div class="editorial">
             <h2>Editorial Summary</h2>
-            {f'<div class="audio-player"><audio controls><source src="{os.path.basename(audio_file)}" type="audio/aiff">Your browser does not support audio.</audio></div>' if audio_file else ''}
+            {f'<div class="audio-player"><audio controls><source src="{os.path.basename(audio_file)}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_file else ''}
             {editorial_html}
         </div>''' if editorial_html else ''}
 
@@ -1070,7 +1070,7 @@ def main():
     print("Generating audio narration...")
     audio_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        f"{safe_name}_{run_date}.aiff",
+        f"{safe_name}_{run_date}.m4a",
     )
     audio_file = generate_audio(editorial_html, audio_path)
 
