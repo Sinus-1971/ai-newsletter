@@ -806,18 +806,143 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None):
         return False
 
 
-def list_scheduled_subjects():
+def list_scheduled_jobs():
+    """Parse cron and return detailed info for all AgentGeneric and newsletter jobs."""
+    day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
+    jobs = []
+    try:
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return jobs
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+
+            minute, hour, dom, month, dow = parts[0:5]
+            rest = " ".join(parts[5:])
+
+            # Determine schedule description
+            if dow != "*" and dom == "*":
+                day_name = day_names.get(int(dow), dow)
+                schedule = f"Weekly on {day_name} at {int(hour):02d}:{int(minute):02d}"
+            else:
+                schedule = f"Daily at {int(hour):02d}:{int(minute):02d}"
+
+            # Parse marker
+            marker_match = re.search(r"# AgentGeneric:(.+)$", line)
+            if marker_match:
+                subject = marker_match.group(1).replace("_", " ")
+                # Extract recipients if present
+                recip_match = re.search(r'--recipients\s+"([^"]+)"', line)
+                recipients = recip_match.group(1).split(",") if recip_match else []
+                jobs.append({
+                    "type": "AgentGeneric",
+                    "subject": subject,
+                    "schedule": schedule,
+                    "recipients": recipients,
+                    "marker": f"AgentGeneric:{marker_match.group(1)}",
+                    "line": line,
+                })
+            elif "ai_newsletter.py" in line:
+                jobs.append({
+                    "type": "AI Newsletter",
+                    "subject": "AI (ai_newsletter.py)",
+                    "schedule": schedule,
+                    "recipients": [EMAIL_TO],
+                    "marker": "__ai_newsletter__",
+                    "line": line,
+                })
+    except Exception:
+        pass
+    return jobs
+
+
+def display_and_manage_jobs():
+    """Show all scheduled newsletter jobs and offer removal. Returns True if any were removed."""
+    jobs = list_scheduled_jobs()
+    if not jobs:
+        return False
+
+    print("Scheduled newsletters:")
+    print("-" * 50)
+    for i, job in enumerate(jobs, 1):
+        recip_str = ", ".join(job["recipients"][:3])
+        if len(job["recipients"]) > 3:
+            recip_str += f" (+{len(job['recipients']) - 3} more)"
+        print(f"  {i}. [{job['type']}] {job['subject']}")
+        print(f"     Schedule:   {job['schedule']}")
+        if recip_str:
+            print(f"     Recipients: {recip_str}")
+    print("-" * 50)
+    print()
+
+    remove_input = input("Enter numbers to remove (e.g., 1,3), or press Enter to keep all: ").strip()
+    if not remove_input:
+        print("  All jobs kept.")
+        return False
+
+    to_remove = set()
+    for part in remove_input.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part)
+            if 1 <= idx <= len(jobs):
+                to_remove.add(idx)
+
+    if not to_remove:
+        print("  No valid selections. All jobs kept.")
+        return False
+
+    # Confirm removal
+    print()
+    print("  Will remove:")
+    for idx in sorted(to_remove):
+        job = jobs[idx - 1]
+        print(f"    - {job['subject']} ({job['schedule']})")
+
+    confirm = input("  Confirm removal? (y/n): ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print("  Removal cancelled.")
+        return False
+
+    # Remove selected jobs from crontab
+    markers_to_remove = set()
+    for idx in to_remove:
+        markers_to_remove.add(jobs[idx - 1]["marker"])
+
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         lines = result.stdout.strip().split("\n")
-        subjects = []
+        new_lines = []
         for line in lines:
-            match = re.search(r"# AgentGeneric:(.+)$", line)
-            if match:
-                subjects.append(match.group(1).replace("_", " "))
-        return subjects
-    except Exception:
-        return []
+            remove_this = False
+            for marker in markers_to_remove:
+                if marker == "__ai_newsletter__":
+                    if "ai_newsletter.py" in line:
+                        remove_this = True
+                        break
+                elif marker in line:
+                    remove_this = True
+                    break
+            if not remove_this:
+                new_lines.append(line)
+
+        if new_lines:
+            new_crontab = "\n".join(new_lines) + "\n"
+        else:
+            new_crontab = ""
+
+        subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
+        print(f"  Removed {len(to_remove)} job(s).")
+        return True
+    except Exception as e:
+        print(f"  [ERROR] Failed to update crontab: {e}")
+        return False
 
 
 def print_summary(subject, recipients, period, schedule_time, day_of_week, total_articles):
@@ -865,12 +990,8 @@ def main():
         print("=" * 50)
         print()
 
-        scheduled = list_scheduled_subjects()
-        if scheduled:
-            print("Currently scheduled subjects:")
-            for s in scheduled:
-                print(f"  - {s}")
-            print()
+        display_and_manage_jobs()
+        print()
 
         subject = input("Enter the subject of inquiry: ").strip()
         if not subject:
