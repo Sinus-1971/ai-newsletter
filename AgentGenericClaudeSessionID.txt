@@ -1,5 +1,5 @@
 Claude Code Session ID: 741e6828-33d9-497c-88a6-52f3521b9aa1
-Project: Newsletter Generator Suite (AgentGeneric + ai_newsletter + watchdog)
+Project: Newsletter Generator Suite (AgentGeneric + Magent + ai_newsletter + watchdog)
 Directory: /Users/sinan/projects/Orchestrator/files2/
 GitHub: https://github.com/Sinus-1971/ai-newsletter
 Last updated: 2026-05-16
@@ -16,6 +16,8 @@ Session summary:
 - Added selectable narration duration: 1-30 minutes (default 3), editorial length scales with duration
 - Added quick mode: python3 AgentGeneric.py "Subject" — auto-approved with English, 0.75x speed, 3 min, emailed to sinankezer@gmail.com
 - Three invocation modes: quick (positional arg), interactive (no args), CLI flags (--subject etc.)
+- Created Magent.py: Microsoft Edge neural TTS variant (edge-tts, free, no API key, cross-platform)
+  Voices: en-US-AriaNeural, tr-TR-EmelNeural, fr-FR-DeniseNeural. Output: .mp3
 
 To resume this session context in Claude Code, reference this session ID or
 open the project directory and Claude will load CLAUDE.md + memory files automatically.
