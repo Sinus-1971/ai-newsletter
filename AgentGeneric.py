@@ -24,6 +24,7 @@ import smtplib
 import os
 import sys
 import subprocess
+import base64
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -446,6 +447,16 @@ def generate_audio(editorial_html, output_path, voice=None, speed=AUDIO_SPEED):
             check=True, timeout=180,
         )
         os.remove(txt_path)
+        compressed = output_path + ".tmp"
+        try:
+            subprocess.run(
+                ["afconvert", "-f", "m4af", "-d", "aac", "-b", "64000", output_path, compressed],
+                check=True, timeout=60,
+            )
+            os.replace(compressed, output_path)
+        except Exception:
+            if os.path.exists(compressed):
+                os.remove(compressed)
         print(f"Audio saved: {output_path} (speed: {speed}x)")
         return output_path
     except Exception as e:
@@ -455,7 +466,13 @@ def generate_audio(editorial_html, output_path, voice=None, speed=AUDIO_SPEED):
         return None
 
 
-def generate_html(all_results, subject, run_date, editorial_html="", audio_file=None):
+def audio_to_data_uri(audio_path):
+    with open(audio_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:audio/mp4;base64,{b64}"
+
+
+def generate_html(all_results, subject, run_date, editorial_html="", audio_src=None):
     source_count = sum(1 for v in all_results.values() if v["articles"])
     article_count = sum(len(v["articles"]) for v in all_results.values())
 
@@ -721,7 +738,7 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_file=
 
         {f'''<div class="editorial">
             <h2>Editorial Summary</h2>
-            {f'<div class="audio-player"><audio controls><source src="{os.path.basename(audio_file)}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_file else ''}
+            {f'<div class="audio-player"><audio controls><source src="{audio_src}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_src else ''}
             {editorial_html}
         </div>''' if editorial_html else ''}
 
@@ -979,6 +996,15 @@ def list_scheduled_jobs():
                     "marker": "__ai_newsletter__",
                     "line": line,
                 })
+            elif "newsletter_watchdog.py" in line:
+                jobs.append({
+                    "type": "Watchdog",
+                    "subject": "Missed-job recovery",
+                    "schedule": "Hourly at :00",
+                    "recipients": [],
+                    "marker": "__watchdog__",
+                    "line": line,
+                })
     except Exception:
         pass
     return jobs
@@ -1171,8 +1197,14 @@ def main():
     )
     audio_file = generate_audio(editorial_html, audio_path, voice)
 
+    audio_src = None
+    if audio_file:
+        audio_src = audio_to_data_uri(audio_file)
+        os.remove(audio_file)
+        print(f"Audio embedded in HTML, file cleaned up: {os.path.basename(audio_file)}")
+
     print("Generating HTML newsletter...")
-    html = generate_html(all_results, subject, run_date, editorial_html, audio_file)
+    html = generate_html(all_results, subject, run_date, editorial_html, audio_src)
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
@@ -1186,9 +1218,6 @@ def main():
         if not args.no_email and recipients:
             print()
             send_email(html, subject, run_date, recipients)
-            if audio_file and os.path.exists(audio_file):
-                os.remove(audio_file)
-                print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
         print("\nDone!")
         return
 
@@ -1211,9 +1240,6 @@ def main():
     if recipients:
         print()
         send_email(html, subject, run_date, recipients)
-        if audio_file and os.path.exists(audio_file):
-            os.remove(audio_file)
-            print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
 
     # Set up cron if periodic
     if period and schedule_time and recipients:

@@ -1,13 +1,13 @@
 # Newsletter Generator Suite
 
-This repo contains two newsletter generators sharing the same architecture and credentials.
+This repo contains two newsletter generators and a watchdog, sharing the same architecture and credentials.
 Can be run from any directory — all paths resolve relative to the script location.
 
 ---
 
 ## 1. ai_newsletter.py — AI-focused newsletter
 
-Fetches AI news from 10 hardcoded RSS sources (TechCrunch, The Verge, Ars Technica, VentureBeat, MIT Tech Review, Wired, The Register, Google AI Blog, OpenAI Blog, Hugging Face Blog). Generates a Claude API editorial summary with audio narration (English, 1.25x speed, macOS TTS) and emails a styled HTML newsletter. Audio file is deleted after email is sent. Output: `Sites_YYYY-MM-DD.html`.
+Fetches AI news from 10 hardcoded RSS sources (TechCrunch, The Verge, Ars Technica, VentureBeat, MIT Tech Review, Wired, The Register, Google AI Blog, OpenAI Blog, Hugging Face Blog). Generates a Claude API editorial summary with audio narration (English, 1.25x speed, macOS TTS) and emails a styled HTML newsletter. Audio is compressed via `afconvert` (64 kbps AAC) and embedded as base64 data URI in the HTML for self-contained playback. Output: `Sites_YYYY-MM-DD.html`.
 
 Sources with `filter_keywords` fetch a general feed and filter client-side. The rest use AI-specific RSS endpoints.
 
@@ -23,8 +23,8 @@ Full interactive application with the following startup flow:
 6. **RSS resolution** — 3-tier: AI-suggested URL → pattern discovery (`/feed/`, `/rss`, `/rss.xml`, etc.) → Google News site filter
 7. **Article fetching** — from discovered sites + Google News + Reddit, with deduplication
 8. **Editorial generation** — Claude API writes 5-6 paragraphs in the selected language with embedded article links
-9. **Audio narration** — macOS `say` generates .m4a at 1.25x speed using language-matched voice (Samantha/English, Yelda/Turkish, Thomas/French). Audio file deleted after email is sent
-10. **HTML generation** — dark theme with turquoise header, embedded audio player, editorial section, article listings by source
+9. **Audio narration** — macOS `say` generates .m4a at 1.25x speed, compressed via `afconvert` (64 kbps AAC), embedded as base64 data URI in HTML. Voices: Samantha/English, Yelda/Turkish, Thomas/French
+10. **HTML generation** — dark theme with turquoise header, self-contained audio player (base64), editorial section, article listings by source
 11. **Schedule prompt** — daily or weekly, custom time (HH:MM), day of week for weekly
 12. **Confirmation summary** — displays subject, language, article count, recipients, schedule. Requires y/n approval
 13. **Send & schedule** — sends email immediately, sets up cron if periodic (first send acts as test run)
@@ -35,17 +35,32 @@ Full interactive application with the following startup flow:
 - Source caching in `.source_cache/{subject}_sources.json` — expires after 7 days
 - `validate_email()` — checks @, domain, TLD, duplicates
 - `display_and_manage_jobs()` — parses crontab, shows all newsletter jobs, offers numbered removal
-- `generate_audio()` — macOS `say` with 1.25x speed, language-specific voice, .m4a format
-- Audio cleanup — .m4a files deleted after email is sent to save disk space
+- `generate_audio()` — macOS `say` with 1.25x speed, compressed via `afconvert`, language-specific voice
+- `audio_to_data_uri()` — reads .m4a, returns base64 data URI for HTML embedding; .m4a deleted after embedding
 - CLI: `--subject`, `--recipients`, `--lang` (0/1/2/3), `--no-email`, `--refresh-sources`
 - Cron entries tagged `# AgentGeneric:{subject}` for identification and management
+
+## 3. newsletter_watchdog.py — Missed-job recovery
+
+Runs hourly via cron. Parses crontab for all newsletter jobs (ai_newsletter + AgentGeneric), checks if each job's expected output file exists for today, and re-runs any missed job.
+
+**Logic:**
+- For daily jobs: checks every day
+- For weekly jobs: checks only on the scheduled day of week
+- Only triggers if current time is past the job's scheduled time AND today's output file is missing
+- Runs the exact cron command, inheriting environment from `.env`
+- Tagged `# NewsletterWatchdog` in crontab
+
+**Output files checked:**
+- `ai_newsletter.py` → `Sites_{YYYY-MM-DD}.html`
+- `AgentGeneric.py` → `{Subject}_{YYYY-MM-DD}.html`
 
 ## Shared architecture
 Both scripts use:
 - `feedparser` + `requests` for RSS fetching
 - `anthropic` SDK (Claude API, model: `claude-sonnet-4-6`) for editorial summary generation
 - `smtplib` for Gmail SMTP email delivery
-- macOS `say` for TTS audio narration (.m4a format, 1.25x speed)
+- macOS `say` + `afconvert` for TTS audio narration (compressed .m4a, 1.25x speed, base64-embedded in HTML)
 - `python-dotenv` for auto-loading `.env` credentials
 - `SCRIPT_DIR` constant for directory-independent operation
 - Pure string-based HTML generation (no templating engine)
@@ -82,11 +97,12 @@ python3 /path/to/AgentGeneric.py --subject "Quantum Computing" --recipients "a@b
 - `--lang 2` — Turkish (Yelda voice)
 - `--lang 3` — French (Thomas voice)
 
-## Daily schedule
+## Schedule & watchdog
 Cron jobs are user-configurable (daily or weekly, any time). View/edit with `crontab -e`.
 - `ai_newsletter.py` — single cron entry at 8:00 AM, logs to `newsletter.log`
 - `AgentGeneric.py` — one cron entry per subject, tagged `# AgentGeneric:{subject}`, logs to `newsletter_{subject}.log`
-- AgentGeneric shows and manages all cron jobs on startup
+- `newsletter_watchdog.py` — runs hourly at :00, tagged `# NewsletterWatchdog`, logs to `newsletter_watchdog.log`
+- AgentGeneric shows and manages all cron jobs (including watchdog) on startup
 
 ## Dependencies
 ```
@@ -96,6 +112,7 @@ pip install feedparser requests anthropic python-dotenv
 ## Files
 - `ai_newsletter.py` — AI-focused newsletter script
 - `AgentGeneric.py` — generic subject newsletter script (interactive + CLI)
+- `newsletter_watchdog.py` — hourly missed-job recovery script
 - `.env` — Gmail App Password and Anthropic API key (gitignored, DO NOT commit)
 - `.gitignore` — excludes `.env`, logs, generated HTML/audio files, cache
 - `.source_cache/` — cached source discovery results per subject (gitignored)
@@ -108,10 +125,10 @@ Repo: https://github.com/Sinus-1971/ai-newsletter (account: Sinus-1971)
 
 ## Known considerations
 - Some RSS sources may block requests or change URLs over time — check warnings in output
-- Mac must be awake for cron to fire (macOS catches up on missed jobs when it wakes)
+- Mac must be awake for cron to fire; the hourly watchdog recovers missed jobs when the Mac wakes up
 - The HTML uses inline CSS for email compatibility
 - Editorial and audio gracefully degrade — if API key missing or call fails, newsletter still generates without them
 - Claude API costs are minimal (~$0.01-0.02 per run using claude-sonnet-4-6; source discovery cached to reduce calls)
-- Audio uses macOS `say` — only works on macOS, not Linux/cloud servers
-- Audio files are deleted after email is sent to save disk space
+- Audio uses macOS `say` + `afconvert` — only works on macOS, not Linux/cloud servers
+- Audio is compressed (64 kbps AAC) and embedded as base64 in HTML; .m4a files are deleted after embedding
 - Source cache expires after 7 days; use `--refresh-sources` to force rediscovery

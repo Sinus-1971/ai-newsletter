@@ -20,6 +20,8 @@ import time
 import smtplib
 import os
 import sys
+import subprocess
+import base64
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -256,12 +258,21 @@ def generate_audio(editorial_html, output_path, voice="Samantha", speed=1.25):
     rate = int(200 * speed)
 
     try:
-        import subprocess
         subprocess.run(
             ["say", "-v", voice, "-r", str(rate), "-o", output_path, "-f", txt_path],
             check=True, timeout=180,
         )
         os.remove(txt_path)
+        compressed = output_path + ".tmp"
+        try:
+            subprocess.run(
+                ["afconvert", "-f", "m4af", "-d", "aac", "-b", "64000", output_path, compressed],
+                check=True, timeout=60,
+            )
+            os.replace(compressed, output_path)
+        except Exception:
+            if os.path.exists(compressed):
+                os.remove(compressed)
         print(f"Audio saved: {output_path} (speed: {speed}x)")
         return output_path
     except Exception as e:
@@ -271,7 +282,13 @@ def generate_audio(editorial_html, output_path, voice="Samantha", speed=1.25):
         return None
 
 
-def generate_html(all_results, run_date, editorial_html="", audio_file=None):
+def audio_to_data_uri(audio_path):
+    with open(audio_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:audio/mp4;base64,{b64}"
+
+
+def generate_html(all_results, run_date, editorial_html="", audio_src=None):
     source_count = sum(1 for v in all_results.values() if v["articles"])
     article_count = sum(len(v["articles"]) for v in all_results.values())
 
@@ -535,7 +552,7 @@ def generate_html(all_results, run_date, editorial_html="", audio_file=None):
 
         {f'''<div class="editorial">
             <h2>Editorial Summary</h2>
-            {f'<div class="audio-player"><audio controls><source src="{os.path.basename(audio_file)}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_file else ''}
+            {f'<div class="audio-player"><audio controls><source src="{audio_src}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_src else ''}
             {editorial_html}
         </div>''' if editorial_html else ''}
 
@@ -600,8 +617,14 @@ def main():
     audio_path = os.path.join(SCRIPT_DIR, f"Sites_{run_date}.m4a")
     audio_file = generate_audio(editorial_html, audio_path)
 
+    audio_src = None
+    if audio_file:
+        audio_src = audio_to_data_uri(audio_file)
+        os.remove(audio_file)
+        print(f"Audio embedded in HTML, file cleaned up: {os.path.basename(audio_file)}")
+
     print("Generating HTML newsletter...")
-    html = generate_html(all_results, run_date, editorial_html, audio_file)
+    html = generate_html(all_results, run_date, editorial_html, audio_src)
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
@@ -612,10 +635,6 @@ def main():
 
     print()
     send_email(html, run_date)
-
-    if audio_file and os.path.exists(audio_file):
-        os.remove(audio_file)
-        print(f"Audio file cleaned up: {os.path.basename(audio_file)}")
 
     print("Done!")
 
