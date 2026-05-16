@@ -1,0 +1,10 @@
+Claude Code Session ID: ccb25ceb-ca22-4c85-851f-3c1a201be811
+Project: Newsletter Generator Suite (AgentGeneric + ai_newsletter + watchdog)
+Directory: /Users/sinan/projects/Orchestrator/files2/
+GitHub: https://github.com/Sinus-1971/ai-newsletter
+Last updated: 2026-05-16
+
+Session transcript: /Users/sinan/.claude/projects/-Users-sinan-projects-Orchestrator-files2/ccb25ceb-ca22-4c85-851f-3c1a201be811.jsonl
+
+To resume this session context in Claude Code, reference this session ID or
+open the project directory and Claude will load CLAUDE.md + memory files automatically.
