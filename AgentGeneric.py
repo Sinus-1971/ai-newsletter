@@ -413,11 +413,14 @@ Articles:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2000,
+            max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
         editorial_html = message.content[0].text
-        print("Editorial summary generated via Claude API")
+        if message.stop_reason == "end_turn":
+            print("Editorial summary generated via Claude API")
+        else:
+            print(f"[WARNING] Editorial may be incomplete (stop_reason: {message.stop_reason})")
         return editorial_html
     except Exception as e:
         print(f"[WARNING] Failed to generate editorial: {e}")
@@ -1112,17 +1115,17 @@ def display_and_manage_jobs():
         return False
 
 
-def print_summary(subject, recipients, period, schedule_time, day_of_week, total_articles, lang_name="English"):
+def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name="English", audio_name="None"):
     day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
 
     print()
     print("=" * 50)
-    print("  SUMMARY — Please review before proceeding")
+    print("  REVIEW — Please confirm before proceeding")
     print("=" * 50)
     print()
     print(f"  Subject:      {subject}")
     print(f"  Language:     {lang_name}")
-    print(f"  Articles:     {total_articles}")
+    print(f"  Audio:        {audio_name}")
     print()
     print(f"  Recipients:   ({len(recipients)})")
     for email in recipients:
@@ -1194,6 +1197,14 @@ def main():
         print()
         period, schedule_time, day_of_week = ask_schedule()
 
+    # Show review summary and ask for confirmation (interactive only)
+    if is_interactive:
+        print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name, audio_opt["name"])
+        confirm = input("  Proceed? (y/n): ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("\n  Cancelled.")
+            sys.exit(0)
+
     # Fetch and generate
     run_date = datetime.now().strftime("%Y-%m-%d")
     safe_name = sanitize_filename(subject)
@@ -1243,33 +1254,15 @@ def main():
     print(f"Newsletter saved: {filename}")
     print(f"Total articles: {total}")
 
-    # Non-interactive mode: just send and exit
-    if not is_interactive:
-        if not args.no_email and recipients:
-            print()
-            send_email(html, subject, run_date, recipients, audio_bytes, audio_filename)
-        print("\nDone!")
-        return
-
-    # Show summary and ask for confirmation
-    print_summary(subject, recipients, period, schedule_time, day_of_week, total, lang_name)
-
-    confirm = input("  Proceed? (y/n): ").strip().lower()
-    if confirm not in ("y", "yes"):
-        print("\n  Cancelled. Newsletter saved locally but not sent.")
-        print(f"  File: {filename}")
-        return
-
     # Send email
-    if recipients:
+    if not args.no_email and recipients:
         print()
-        send_email(html, subject, run_date, recipients)
+        send_email(html, subject, run_date, recipients, audio_bytes, audio_filename)
 
-    # Set up cron if periodic
-    if period and schedule_time and recipients:
+    # Set up cron if periodic (interactive only)
+    if is_interactive and period and schedule_time and recipients:
         print()
         setup_cron(subject, recipients, period, schedule_time, day_of_week, audio_opt["code"])
-        print("First email sent above as a test run.")
 
     print("\nDone!")
 

@@ -233,11 +233,14 @@ Articles:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2000,
+            max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
         editorial_html = message.content[0].text
-        print("Editorial summary generated via Claude API")
+        if message.stop_reason == "end_turn":
+            print("Editorial summary generated via Claude API")
+        else:
+            print(f"[WARNING] Editorial may be incomplete (stop_reason: {message.stop_reason})")
         return editorial_html
     except Exception as e:
         print(f"[WARNING] Failed to generate editorial: {e}")
