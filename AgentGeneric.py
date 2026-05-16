@@ -1188,6 +1188,12 @@ def main():
     else:
         recipients = [EMAIL_TO]
 
+    # Ask about scheduling (interactive only)
+    period, schedule_time, day_of_week = None, None, None
+    if is_interactive and recipients:
+        print()
+        period, schedule_time, day_of_week = ask_schedule()
+
     # Fetch and generate
     run_date = datetime.now().strftime("%Y-%m-%d")
     safe_name = sanitize_filename(subject)
@@ -1244,12 +1250,6 @@ def main():
             send_email(html, subject, run_date, recipients, audio_bytes, audio_filename)
         print("\nDone!")
         return
-
-    # Interactive mode: ask about scheduling
-    period, schedule_time, day_of_week = None, None, None
-    if recipients:
-        print()
-        period, schedule_time, day_of_week = ask_schedule()
 
     # Show summary and ask for confirmation
     print_summary(subject, recipients, period, schedule_time, day_of_week, total, lang_name)
