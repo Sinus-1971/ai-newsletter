@@ -53,7 +53,13 @@ AUDIO_OPTIONS = {
     "3": {"name": "French",    "voice": "Thomas",    "lang_name": "French",  "code": "3"},
 }
 
-AUDIO_SPEED = 1.25
+AUDIO_SPEED = 1.0
+
+SPEED_OPTIONS = {
+    "1": 0.75,
+    "2": 1.0,
+    "3": 1.25,
+}
 
 RSS_PATTERNS = ["/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/feeds/posts/default"]
 
@@ -372,7 +378,7 @@ def deduplicate_articles(all_results):
     return all_results
 
 
-def generate_editorial(all_results, subject, run_date, lang_name="English"):
+def generate_editorial(all_results, subject, run_date, lang_name="English", target_words=600):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("[WARNING] ANTHROPIC_API_KEY not set — skipping editorial summary.")
@@ -392,11 +398,21 @@ def generate_editorial(all_results, subject, run_date, lang_name="English"):
 
     lang_instruction = f"- Write entirely in {lang_name}" if lang_name != "English" else "- Write in English"
 
+    if target_words <= 600:
+        length_instruction = "Write a 5-6 paragraph editorial summary"
+    elif target_words <= 1500:
+        length_instruction = f"Write a detailed editorial of approximately {target_words} words (10-15 paragraphs)"
+    else:
+        length_instruction = f"Write an in-depth editorial of approximately {target_words} words (15-25+ paragraphs)"
+
+    max_tokens = max(4000, int(target_words * 1.5))
+
     prompt = f"""You are an expert analyst writing a daily newsletter editorial about "{subject}".
-Based on today's ({run_date}) articles below, write a 5-6 paragraph editorial summary.
+Based on today's ({run_date}) articles below, {length_instruction.lower()}.
 
 Rules:
 {lang_instruction}
+- Target approximately {target_words} words
 - Write in an engaging, professional journalistic tone
 - Identify the major themes and trends across all articles related to {subject}
 - Embed relevant article links naturally as HTML anchor tags: <a href="URL">descriptive text</a>
@@ -413,7 +429,7 @@ Articles:
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         editorial_html = message.content[0].text
@@ -776,10 +792,50 @@ def ask_audio():
         choice = "1"
     opt = AUDIO_OPTIONS[choice]
     if opt["voice"]:
-        print(f"  Audio: {opt['name']} (voice: {opt['voice']}, speed: {AUDIO_SPEED}x)")
+        print(f"  Audio: {opt['name']} (voice: {opt['voice']})")
     else:
         print(f"  Audio: disabled")
     return opt
+
+
+def ask_speed():
+    print()
+    print("Narration speed:")
+    print()
+    print("  1 — 0.75x (slow)")
+    print("  2 — 1x (normal, default)")
+    print("  3 — 1.25x (fast)")
+    print()
+    choice = input("  Select (1-3, default: 2): ").strip()
+    if not choice:
+        choice = "2"
+    if choice not in SPEED_OPTIONS:
+        print(f"  Invalid choice. Using 1x.")
+        choice = "2"
+    speed = SPEED_OPTIONS[choice]
+    print(f"  Speed: {speed}x")
+    return speed
+
+
+def ask_duration():
+    print()
+    print("Narration duration (minutes):")
+    print()
+    choice = input("  Enter duration (1-30, default: 3): ").strip()
+    if not choice:
+        duration = 3
+    else:
+        try:
+            duration = int(choice)
+            if duration < 1:
+                duration = 1
+            elif duration > 30:
+                duration = 30
+        except ValueError:
+            print(f"  Invalid input. Using 3 minutes.")
+            duration = 3
+    print(f"  Duration: {duration} min")
+    return duration
 
 
 KNOWN_DOMAINS = [
@@ -1115,7 +1171,7 @@ def display_and_manage_jobs():
         return False
 
 
-def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name="English", audio_name="None"):
+def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name="English", audio_name="None", speed=AUDIO_SPEED, duration=3):
     day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
 
     print()
@@ -1126,6 +1182,9 @@ def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_
     print(f"  Subject:      {subject}")
     print(f"  Language:     {lang_name}")
     print(f"  Audio:        {audio_name}")
+    if audio_name != "No audio":
+        print(f"  Speed:        {speed}x")
+        print(f"  Duration:     {duration} min")
     print()
     print(f"  Recipients:   ({len(recipients)})")
     for email in recipients:
@@ -1148,16 +1207,31 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="AgentGeneric — Subject-based newsletter generator")
+    parser.add_argument("quick_subject", nargs="?", type=str, default=None, help="Subject for quick mode (auto-approved, English, slow speed, emailed to default recipient)")
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
     parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
     parser.add_argument("--lang", type=str, default="1", help="Audio option: 0=none, 1=English, 2=Turkish, 3=French")
+    parser.add_argument("--speed", type=str, default="2", help="Audio speed: 1=0.75x, 2=1x (default), 3=1.25x")
+    parser.add_argument("--duration", type=int, default=3, help="Audio narration duration in minutes (1-30, default: 3)")
     parser.add_argument("--refresh-sources", action="store_true", help="Force rediscovery of sources (ignore cache)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     args = parser.parse_args()
 
-    is_interactive = args.subject is None
+    quick_mode = args.quick_subject is not None and args.subject is None
+    is_interactive = args.subject is None and not quick_mode
 
-    if is_interactive:
+    if quick_mode:
+        subject = args.quick_subject
+        audio_opt = AUDIO_OPTIONS["1"]
+        speed = SPEED_OPTIONS["1"]
+        duration = 3
+        recipients = [EMAIL_TO]
+        period, schedule_time, day_of_week = None, None, None
+        print("=" * 50)
+        print(f"  Quick mode: \"{subject}\"")
+        print(f"  English | 0.75x speed | 3 min | {EMAIL_TO}")
+        print("=" * 50)
+    elif is_interactive:
         print("=" * 50)
         print("  AgentGeneric — Newsletter Generator")
         print("=" * 50)
@@ -1173,37 +1247,46 @@ def main():
 
         print()
         audio_opt = ask_audio()
+        if audio_opt["voice"]:
+            speed = ask_speed()
+            duration = ask_duration()
+        else:
+            speed = AUDIO_SPEED
+            duration = 3
     else:
         subject = args.subject
         audio_opt = AUDIO_OPTIONS.get(args.lang, AUDIO_OPTIONS["1"])
+        speed = SPEED_OPTIONS.get(args.speed, SPEED_OPTIONS["2"])
+        duration = max(1, min(30, args.duration))
 
     lang_name = audio_opt["lang_name"] or "English"
     voice = audio_opt["voice"]
 
-    # Determine recipients
-    if args.recipients:
-        recipients = [e.strip() for e in args.recipients.split(",") if e.strip()]
-    elif is_interactive:
-        print()
-        recipients = collect_emails()
-        if not recipients:
-            print("  No valid emails entered. Newsletter will be saved but not emailed.")
-    else:
-        recipients = [EMAIL_TO]
+    if not quick_mode:
+        # Determine recipients
+        if args.recipients:
+            recipients = [e.strip() for e in args.recipients.split(",") if e.strip()]
+        elif is_interactive:
+            print()
+            recipients = collect_emails()
+            if not recipients:
+                print("  No valid emails entered. Newsletter will be saved but not emailed.")
+        else:
+            recipients = [EMAIL_TO]
 
-    # Ask about scheduling (interactive only)
-    period, schedule_time, day_of_week = None, None, None
-    if is_interactive and recipients:
-        print()
-        period, schedule_time, day_of_week = ask_schedule()
+        # Ask about scheduling (interactive only)
+        period, schedule_time, day_of_week = None, None, None
+        if is_interactive and recipients:
+            print()
+            period, schedule_time, day_of_week = ask_schedule()
 
-    # Show review summary and ask for confirmation (interactive only)
-    if is_interactive:
-        print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name, audio_opt["name"])
-        confirm = input("  Proceed? (y/n): ").strip().lower()
-        if confirm not in ("y", "yes"):
-            print("\n  Cancelled.")
-            sys.exit(0)
+        # Show review summary and ask for confirmation (interactive only)
+        if is_interactive:
+            print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name, audio_opt["name"], speed, duration)
+            confirm = input("  Proceed? (y/n): ").strip().lower()
+            if confirm not in ("y", "yes"):
+                print("\n  Cancelled.")
+                sys.exit(0)
 
     # Fetch and generate
     run_date = datetime.now().strftime("%Y-%m-%d")
@@ -1224,14 +1307,15 @@ def main():
 
     print()
     print("Generating editorial summary...")
-    editorial_html = generate_editorial(all_results, subject, run_date, lang_name)
+    target_words = int(duration * 200 * speed)
+    editorial_html = generate_editorial(all_results, subject, run_date, lang_name, target_words)
 
     print("Generating audio narration...")
     audio_path = os.path.join(
         SCRIPT_DIR,
         f"{safe_name}_{run_date}.m4a",
     )
-    audio_file = generate_audio(editorial_html, audio_path, voice)
+    audio_file = generate_audio(editorial_html, audio_path, voice, speed)
 
     audio_src = None
     audio_bytes = None

@@ -1,10 +1,21 @@
-Claude Code Session ID: ccb25ceb-ca22-4c85-851f-3c1a201be811
+Claude Code Session ID: 741e6828-33d9-497c-88a6-52f3521b9aa1
 Project: Newsletter Generator Suite (AgentGeneric + ai_newsletter + watchdog)
 Directory: /Users/sinan/projects/Orchestrator/files2/
 GitHub: https://github.com/Sinus-1971/ai-newsletter
 Last updated: 2026-05-16
 
-Session transcript: /Users/sinan/.claude/projects/-Users-sinan-projects-Orchestrator-files2/ccb25ceb-ca22-4c85-851f-3c1a201be811.jsonl
+Previous session: ccb25ceb-ca22-4c85-851f-3c1a201be811
+Session transcript: /Users/sinan/.claude/projects/-Users-sinan-projects-Orchestrator-files2/741e6828-33d9-497c-88a6-52f3521b9aa1.jsonl
+
+Session summary:
+- Restored missing ai_newsletter.py cron job (daily 08:00, was accidentally removed)
+- Confirmed all 3 cron entries working: watchdog (hourly), ai_newsletter (08:00), AgentGeneric AI (11:00)
+- Automator app fix: must use /opt/anaconda3/bin/python3 (not system python3) for feedparser/dependencies
+- Automator app fix: use "Run AppleScript" action to open Terminal for interactive input
+- Added selectable audio speed: 0.75x (slow), 1x (normal), 1.25x (fast)
+- Added selectable narration duration: 1-30 minutes (default 3), editorial length scales with duration
+- Added quick mode: python3 AgentGeneric.py "Subject" — auto-approved with English, 0.75x speed, 3 min, emailed to sinankezer@gmail.com
+- Three invocation modes: quick (positional arg), interactive (no args), CLI flags (--subject etc.)
 
 To resume this session context in Claude Code, reference this session ID or
 open the project directory and Claude will load CLAUDE.md + memory files automatically.

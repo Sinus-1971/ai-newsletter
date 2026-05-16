@@ -3,7 +3,7 @@
 This repo contains two newsletter generators and a watchdog, sharing the same architecture and credentials.
 Can be run from any directory — all paths resolve relative to the script location.
 
-**Claude Session ID:** `ccb25ceb-ca22-4c85-851f-3c1a201be811`
+**Claude Session ID:** `741e6828-33d9-497c-88a6-52f3521b9aa1`
 
 ---
 
@@ -19,17 +19,19 @@ Full interactive application. All user input is collected upfront, reviewed, and
 
 1. **Cron job management** — lists all scheduled newsletters (AI Newsletter + AgentGeneric + Watchdog) with type, subject, schedule, recipients. User can select jobs by number to remove, with confirmation
 2. **Subject input** — any topic (e.g., "Quantum Computing", "Cybersecurity", "Whiskey")
-3. **Audio selection** — 0: No audio, 1: English (default), 2: Turkish, 3: French. Speed: 1.25x
-4. **Email collection** — up to 10 recipients with validation (missing @, no domain, invalid TLD, duplicates)
-5. **Schedule prompt** — daily or weekly, custom time (HH:MM), day of week for weekly
-6. **Review approval** — displays subject, language, audio, recipients, schedule. Requires y/n before processing starts
-7. **Source discovery** — Claude API identifies 10 best authoritative sites, cached for 7 days in `.source_cache/`. Use `--refresh-sources` to force rediscovery
-8. **RSS resolution** — 3-tier: AI-suggested URL → pattern discovery (`/feed/`, `/rss`, `/rss.xml`, etc.) → Google News site filter
-9. **Article fetching** — from discovered sites + Google News + Reddit, with deduplication
-10. **Editorial generation** — Claude API (max_tokens=4000) writes 5-6 paragraphs in the selected language with embedded article links. Warns if output was truncated via stop_reason check
-11. **Audio narration** — macOS `say` generates .m4a at 1.25x speed, compressed via `afconvert` (64 kbps AAC). Voices: Samantha/English, Yelda/Turkish, Thomas/French
-12. **HTML generation** — dark theme with turquoise header, self-contained audio player (base64 in local file), editorial section, article listings by source
-13. **Email delivery** — `multipart/mixed` email: lightweight HTML body (audio stripped, replaced with "Audio narration attached" note) + `.m4a` audio as MIME attachment. Sets up cron if periodic
+3. **Audio selection** — 0: No audio, 1: English (default), 2: Turkish, 3: French
+4. **Speed selection** — 0.75x (slow), 1x (normal, default), 1.25x (fast)
+5. **Duration selection** — narration length in minutes (1-30, default 3). Editorial scales accordingly
+6. **Email collection** — up to 10 recipients with validation (missing @, no domain, invalid TLD, duplicates)
+7. **Schedule prompt** — daily or weekly, custom time (HH:MM), day of week for weekly
+8. **Review approval** — displays subject, language, audio, speed, duration, recipients, schedule. Requires y/n before processing starts
+9. **Source discovery** — Claude API identifies 10 best authoritative sites, cached for 7 days in `.source_cache/`. Use `--refresh-sources` to force rediscovery
+10. **RSS resolution** — 3-tier: AI-suggested URL → pattern discovery (`/feed/`, `/rss`, `/rss.xml`, etc.) → Google News site filter
+11. **Article fetching** — from discovered sites + Google News + Reddit, with deduplication
+12. **Editorial generation** — Claude API writes editorial scaled to target duration (word count = duration × 200 × speed). max_tokens scales automatically. Warns if output was truncated via stop_reason check
+13. **Audio narration** — macOS `say` generates .m4a at selected speed, compressed via `afconvert` (64 kbps AAC). Voices: Samantha/English, Yelda/Turkish, Thomas/French
+14. **HTML generation** — dark theme with turquoise header, self-contained audio player (base64 in local file), editorial section, article listings by source
+15. **Email delivery** — `multipart/mixed` email: lightweight HTML body (audio stripped, replaced with "Audio narration attached" note) + `.m4a` audio as MIME attachment. Sets up cron if periodic
 
 **Key technical features:**
 - `SCRIPT_DIR` — all paths resolve from script location, runnable from any directory
@@ -40,7 +42,8 @@ Full interactive application. All user input is collected upfront, reviewed, and
 - `generate_audio()` — macOS `say` with 1.25x speed, compressed via `afconvert` (64 kbps AAC)
 - `audio_to_data_uri()` — converts audio bytes to base64 data URI for local HTML embedding
 - `send_email()` — `multipart/mixed` with `multipart/alternative` body + audio MIME attachment; base64 audio stripped from HTML to stay under Gmail's ~102 KB rendering limit
-- CLI: `--subject`, `--recipients`, `--lang` (0/1/2/3), `--no-email`, `--refresh-sources`
+- Quick mode: `python3 AgentGeneric.py "Subject"` — auto-approved with English, 0.75x speed, 3 min, emailed to default recipient
+- CLI: `--subject`, `--recipients`, `--lang` (0/1/2/3), `--speed` (1/2/3), `--duration` (1-30), `--no-email`, `--refresh-sources`
 - Cron entries tagged `# AgentGeneric:{subject}` for identification and management
 
 ## 3. newsletter_watchdog.py — Missed-job recovery
@@ -86,7 +89,8 @@ Both scripts use:
 - **ANTHROPIC_API_KEY** — environment variable, auto-loaded from `.env`
 - Both vars also set in `~/.zshrc` for shell-level access
 - **MAX_ARTICLES_PER_SOURCE** = 5
-- **AUDIO_SPEED** = 1.25 (250 words/min)
+- **AUDIO_SPEED** = selectable: 0.75x (slow), 1x (normal/default), 1.25x (fast)
+- **NARRATION_DURATION** = selectable: 1-30 minutes (default 3). Editorial word count scales with duration × speed
 - **CACHE_MAX_AGE_DAYS** = 7
 
 ## How to run
@@ -94,18 +98,37 @@ Both scripts use:
 # AI newsletter (can run from any directory)
 python3 /path/to/ai_newsletter.py
 
+# AgentGeneric — Quick mode (auto-approved: English, 0.75x speed, 3 min, emailed to default recipient)
+python3 /path/to/AgentGeneric.py "Philosophy"
+
 # AgentGeneric (interactive — full menu flow)
 python3 /path/to/AgentGeneric.py
 
 # AgentGeneric (non-interactive — for cron or scripting)
-python3 /path/to/AgentGeneric.py --subject "Quantum Computing" --recipients "a@b.com" --lang 2
+python3 /path/to/AgentGeneric.py --subject "Quantum Computing" --recipients "a@b.com" --lang 2 --speed 1 --duration 5
 ```
+
+## Automator / double-click launcher
+To run AgentGeneric as a macOS app (double-click), create an Automator Application with a **Run AppleScript** action:
+```applescript
+on run {input, parameters}
+    tell application "Terminal"
+        activate
+        do script "cd /Users/sinan/projects/Orchestrator/files2 && /opt/anaconda3/bin/python3 AgentGeneric.py"
+    end tell
+    return input
+end run
+```
+- Must use `/opt/anaconda3/bin/python3` — system python3 lacks feedparser and other dependencies
+- Must open Terminal (not "Run Shell Script") because AgentGeneric needs interactive input
 
 ## Audio options (AgentGeneric)
 - `--lang 0` — No audio
 - `--lang 1` — English (Samantha voice) — default
 - `--lang 2` — Turkish (Yelda voice)
 - `--lang 3` — French (Thomas voice)
+- `--speed 1` — 0.75x (slow), `--speed 2` — 1x (normal, default), `--speed 3` — 1.25x (fast)
+- `--duration N` — narration duration in minutes (1-30, default: 3)
 
 ## Schedule & watchdog
 Cron jobs are user-configurable (daily or weekly, any time). View/edit with `crontab -e`.
@@ -139,7 +162,7 @@ Repo: https://github.com/Sinus-1971/ai-newsletter (account: Sinus-1971)
 - Mac must be awake for cron to fire; the hourly watchdog recovers missed jobs when the Mac wakes up
 - The HTML uses inline CSS for email compatibility
 - Editorial and audio gracefully degrade — if API key missing or call fails, newsletter still generates without them
-- Editorial uses max_tokens=4000 with stop_reason check; warns if output was truncated
+- Editorial uses dynamic max_tokens (scales with duration) with stop_reason check; warns if output was truncated
 - Claude API costs are minimal (~$0.01-0.02 per run using claude-sonnet-4-6; source discovery cached to reduce calls)
 - Audio uses macOS `say` + `afconvert` — only works on macOS, not Linux/cloud servers
 - Audio: base64-embedded in local HTML for self-contained playback; attached as .m4a in email (stripped from HTML to stay under Gmail's ~102 KB limit)
