@@ -584,7 +584,8 @@ def send_email(html_content, run_date):
 
     plain_text = f"AI Daily Briefing for {run_date}. Open in a browser for the full newsletter."
     msg.attach(MIMEText(plain_text, "plain"))
-    msg.attach(MIMEText(html_content, "html"))
+    email_html = re.sub(r'<div class="audio-player">.*?</div>', '', html_content, flags=re.DOTALL)
+    msg.attach(MIMEText(email_html, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
