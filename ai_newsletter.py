@@ -24,6 +24,8 @@ import subprocess
 import base64
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
@@ -282,9 +284,8 @@ def generate_audio(editorial_html, output_path, voice="Samantha", speed=1.25):
         return None
 
 
-def audio_to_data_uri(audio_path):
-    with open(audio_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("ascii")
+def audio_to_data_uri(audio_bytes):
+    b64 = base64.b64encode(audio_bytes).decode("ascii")
     return f"data:audio/mp4;base64,{b64}"
 
 
@@ -570,22 +571,39 @@ def generate_html(all_results, run_date, editorial_html="", audio_src=None):
     return html
 
 
-def send_email(html_content, run_date):
+def send_email(html_content, run_date, audio_bytes=None, audio_filename=None):
     app_password = os.environ.get("GMAIL_APP_PASSWORD")
     if not app_password:
         print("[ERROR] GMAIL_APP_PASSWORD environment variable not set.")
         print("  Set it with: export GMAIL_APP_PASSWORD='your-app-password'")
         return False
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = f"AI Daily Briefing - {run_date}"
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
 
+    alt_part = MIMEMultipart("alternative")
     plain_text = f"AI Daily Briefing for {run_date}. Open in a browser for the full newsletter."
-    msg.attach(MIMEText(plain_text, "plain"))
-    email_html = re.sub(r'<div class="audio-player">.*?</div>', '', html_content, flags=re.DOTALL)
-    msg.attach(MIMEText(email_html, "html", "utf-8"))
+    alt_part.attach(MIMEText(plain_text, "plain"))
+
+    if audio_bytes:
+        email_html = re.sub(
+            r'<div class="audio-player">.*?</div>',
+            '<p style="color: #80f0e0; font-style: italic; margin-bottom: 14px;">Audio narration attached to this email.</p>',
+            html_content, flags=re.DOTALL,
+        )
+    else:
+        email_html = re.sub(r'<div class="audio-player">.*?</div>', '', html_content, flags=re.DOTALL)
+    alt_part.attach(MIMEText(email_html, "html", "utf-8"))
+    msg.attach(alt_part)
+
+    if audio_bytes and audio_filename:
+        audio_part = MIMEBase("audio", "mp4")
+        audio_part.set_payload(audio_bytes)
+        encoders.encode_base64(audio_part)
+        audio_part.add_header("Content-Disposition", "attachment", filename=audio_filename)
+        msg.attach(audio_part)
 
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
@@ -619,10 +637,15 @@ def main():
     audio_file = generate_audio(editorial_html, audio_path)
 
     audio_src = None
+    audio_bytes = None
+    audio_filename = None
     if audio_file:
-        audio_src = audio_to_data_uri(audio_file)
+        with open(audio_file, "rb") as f:
+            audio_bytes = f.read()
+        audio_src = audio_to_data_uri(audio_bytes)
+        audio_filename = os.path.basename(audio_file)
         os.remove(audio_file)
-        print(f"Audio embedded in HTML, file cleaned up: {os.path.basename(audio_file)}")
+        print(f"Audio embedded in HTML, file cleaned up: {audio_filename}")
 
     print("Generating HTML newsletter...")
     html = generate_html(all_results, run_date, editorial_html, audio_src)
@@ -635,7 +658,7 @@ def main():
     print(f"Total articles: {total}")
 
     print()
-    send_email(html, run_date)
+    send_email(html, run_date, audio_bytes, audio_filename)
 
     print("Done!")
 
