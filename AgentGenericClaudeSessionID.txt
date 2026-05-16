@@ -1,5 +1,5 @@
 Claude Code Session ID: 741e6828-33d9-497c-88a6-52f3521b9aa1
-Project: Newsletter Generator Suite (AgentGeneric + Magent + ai_newsletter + watchdog)
+Project: Newsletter Generator Suite (AgentGeneric + Magent + DeepSearch + ai_newsletter + watchdog)
 Directory: /Users/sinan/projects/Orchestrator/files2/
 GitHub: https://github.com/Sinus-1971/ai-newsletter
 Last updated: 2026-05-16
@@ -18,6 +18,12 @@ Session summary:
 - Three invocation modes: quick (positional arg), interactive (no args), CLI flags (--subject etc.)
 - Created Magent.py: Microsoft Edge neural TTS variant (edge-tts, free, no API key, cross-platform)
   Voices: en-US-AriaNeural, tr-TR-EmelNeural, fr-FR-DeniseNeural. Output: .mp3
+- Created DeepSearch.py: Academic research digest
+  Sources: arXiv, Semantic Scholar, PubMed, Google Scholar, research news (all free APIs)
+  Editorial: 10 paragraphs, 1000+ words, structured academic analysis
+  Infographics: Claude-generated HTML/CSS visual panels
+  References: formal numbered citations appended at end
+  Audio: Microsoft neural TTS of editorial only (not full document)
 
 To resume this session context in Claude Code, reference this session ID or
 open the project directory and Claude will load CLAUDE.md + memory files automatically.

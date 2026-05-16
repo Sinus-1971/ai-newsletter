@@ -1,6 +1,6 @@
 # Newsletter Generator Suite
 
-This repo contains three newsletter generators and a watchdog, sharing the same architecture and credentials.
+This repo contains four newsletter/research generators and a watchdog, sharing the same architecture and credentials.
 Can be run from any directory — all paths resolve relative to the script location.
 
 **Claude Session ID:** `741e6828-33d9-497c-88a6-52f3521b9aa1`
@@ -57,7 +57,32 @@ Same functionality as AgentGeneric.py but uses **Microsoft Edge neural TTS** (`e
 - Platform-independent — works on macOS, Linux, Windows (not macOS-only)
 - Cron entries tagged `# Magent:{subject}`
 
-## 4. newsletter_watchdog.py — Missed-job recovery
+## 4. DeepSearch.py — Academic research digest
+
+Fetches from academic sources (arXiv, Semantic Scholar, PubMed, Google Scholar, research news) instead of RSS news. Produces a comprehensive research digest with:
+
+**Key differences from Magent/AgentGeneric:**
+- **Sources**: arXiv API, Semantic Scholar API, PubMed E-utilities, Google Scholar RSS, research news — all free, no API keys
+- **Editorial**: 10 paragraphs, minimum 1000 words, structured (overview → findings → methods → implications → gaps → outlook)
+- **Infographics**: Claude-generated HTML/CSS visual panels (key stats, research landscape, top papers, trend indicators)
+- **References**: Formal numbered citation list appended at end (author, title, source, date, URL)
+- **Audio**: Microsoft Edge neural TTS narrates only the editorial digest (not the full document)
+- **Output**: `DeepSearch_{Subject}_{YYYY-MM-DD}.html`
+- **max_tokens**: 8000 for editorial, 4000 for infographics
+
+**Invocation:**
+```bash
+# Quick mode
+python3 DeepSearch.py "Quantum Computing"
+
+# Interactive
+python3 DeepSearch.py
+
+# CLI
+python3 DeepSearch.py --subject "CRISPR" --recipients "a@b.com" --lang 1 --speed 1
+```
+
+## 5. newsletter_watchdog.py — Missed-job recovery
 
 Runs hourly via cron. Parses crontab for all newsletter jobs (ai_newsletter + AgentGeneric), checks if each job's expected output file exists for today, and re-runs any missed job.
 
@@ -154,12 +179,14 @@ Cron jobs are user-configurable (daily or weekly, any time). View/edit with `cro
 ## Dependencies
 ```
 pip install feedparser requests anthropic python-dotenv edge-tts
+# edge-tts required for Magent.py and DeepSearch.py (Microsoft neural TTS)
 ```
 
 ## Files
 - `ai_newsletter.py` — AI-focused newsletter script
 - `AgentGeneric.py` — generic subject newsletter script (macOS TTS, interactive + CLI)
 - `Magent.py` — generic subject newsletter script (Microsoft neural TTS, interactive + CLI)
+- `DeepSearch.py` — academic research digest (arXiv/Semantic Scholar/PubMed, 1000+ words, infographics, references)
 - `newsletter_watchdog.py` — hourly missed-job recovery script
 - `AgentGenericClaudeSessionID.txt` — Claude Code session ID for continuity
 - `.env` — Gmail App Password and Anthropic API key (gitignored, DO NOT commit)
