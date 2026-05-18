@@ -1044,21 +1044,23 @@ def list_scheduled_jobs():
             rest = " ".join(parts[5:])
 
             # Determine schedule description
-            if dow != "*" and dom == "*":
+            if hour == "*" or minute == "*":
+                schedule = "Hourly at :00"
+            elif dow != "*" and dom == "*":
                 day_name = day_names.get(int(dow), dow)
                 schedule = f"Weekly on {day_name} at {int(hour):02d}:{int(minute):02d}"
             else:
                 schedule = f"Daily at {int(hour):02d}:{int(minute):02d}"
 
             # Parse marker
-            marker_match = re.search(r"# AgentGeneric:(.+)$", line)
+            marker_match = re.search(r"# (?:AgentGeneric|Magent):(.+)$", line)
             if marker_match:
                 subject = marker_match.group(1).replace("_", " ")
-                # Extract recipients if present
                 recip_match = re.search(r'--recipients\s+"([^"]+)"', line)
                 recipients = recip_match.group(1).split(",") if recip_match else []
+                job_type = "Magent" if "Magent.py" in line else "AgentGeneric"
                 jobs.append({
-                    "type": "AgentGeneric",
+                    "type": job_type,
                     "subject": subject,
                     "schedule": schedule,
                     "recipients": recipients,
@@ -1075,14 +1077,7 @@ def list_scheduled_jobs():
                     "line": line,
                 })
             elif "newsletter_watchdog.py" in line:
-                jobs.append({
-                    "type": "Watchdog",
-                    "subject": "Missed-job recovery",
-                    "schedule": "Hourly at :00",
-                    "recipients": [],
-                    "marker": "__watchdog__",
-                    "line": line,
-                })
+                continue
     except Exception:
         pass
     return jobs
@@ -1220,6 +1215,18 @@ def main():
     quick_mode = args.quick_subject is not None and args.subject is None
     is_interactive = args.subject is None and not quick_mode
 
+    if quick_mode or is_interactive:
+        print("=" * 50)
+        if quick_mode:
+            print("  AgentGeneric — Quick Mode")
+        else:
+            print("  AgentGeneric — Newsletter Generator")
+        print("=" * 50)
+        print()
+
+        display_and_manage_jobs()
+        print()
+
     if quick_mode:
         subject = args.quick_subject
         audio_opt = AUDIO_OPTIONS["1"]
@@ -1227,18 +1234,10 @@ def main():
         duration = 3
         recipients = [EMAIL_TO]
         period, schedule_time, day_of_week = None, None, None
-        print("=" * 50)
         print(f"  Quick mode: \"{subject}\"")
         print(f"  English | 0.75x speed | 3 min | {EMAIL_TO}")
         print("=" * 50)
     elif is_interactive:
-        print("=" * 50)
-        print("  AgentGeneric — Newsletter Generator")
-        print("=" * 50)
-        print()
-
-        display_and_manage_jobs()
-        print()
 
         subject = input("Enter the subject of inquiry: ").strip()
         if not subject:

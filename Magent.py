@@ -301,6 +301,7 @@ def fetch_rss(source):
 
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".source_cache")
 CACHE_MAX_AGE_DAYS = 7
+HISTORY_MAX_DAYS = 20
 
 
 def get_cache_path(subject):
@@ -339,6 +340,46 @@ def save_sources_cache(subject, sources):
     print(f"Sources cached to {path}")
 
 
+def get_history_path(subject):
+    safe = sanitize_filename(subject)
+    return os.path.join(CACHE_DIR, f"{safe}_history.json")
+
+
+def load_article_history(subject):
+    path = get_history_path(subject)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            history = json.load(f)
+        cutoff = (datetime.now() - __import__("datetime").timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
+        pruned = {d: fps for d, fps in history.items() if d >= cutoff}
+        return pruned
+    except Exception:
+        return {}
+
+
+def save_article_history(subject, history, new_fingerprints):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    history[today] = list(set(history.get(today, []) + new_fingerprints))
+    cutoff = (datetime.now() - __import__("datetime").timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
+    history = {d: fps for d, fps in history.items() if d >= cutoff}
+    path = get_history_path(subject)
+    with open(path, "w") as f:
+        json.dump(history, f)
+    total = sum(len(v) for v in history.values())
+    days = len(history)
+    print(f"Article history updated: {total} fingerprints across {days} day(s)")
+
+
+def get_history_fingerprints(history):
+    all_fps = set()
+    for fps in history.values():
+        all_fps.update(fps)
+    return all_fps
+
+
 def fetch_all_sources(subject, refresh_sources=False):
     cached = None if refresh_sources else load_cached_sources(subject)
 
@@ -367,9 +408,12 @@ def fetch_all_sources(subject, refresh_sources=False):
     return all_results
 
 
-def deduplicate_articles(all_results):
-    """Remove duplicate articles across sources based on title similarity."""
+def deduplicate_articles(all_results, history_fps=None):
+    """Remove duplicate articles across sources and against previous days."""
     seen_titles = set()
+    if history_fps:
+        seen_titles.update(history_fps)
+    skipped_history = 0
     for source_name, data in all_results.items():
         unique = []
         for art in data["articles"]:
@@ -377,7 +421,11 @@ def deduplicate_articles(all_results):
             if normalized not in seen_titles:
                 seen_titles.add(normalized)
                 unique.append(art)
+            elif history_fps and normalized in history_fps:
+                skipped_history += 1
         data["articles"] = unique
+    if skipped_history:
+        print(f"  Filtered {skipped_history} articles already seen in previous newsletters")
     return all_results
 
 
@@ -1032,7 +1080,9 @@ def list_scheduled_jobs():
             rest = " ".join(parts[5:])
 
             # Determine schedule description
-            if dow != "*" and dom == "*":
+            if hour == "*" or minute == "*":
+                schedule = "Hourly at :00"
+            elif dow != "*" and dom == "*":
                 day_name = day_names.get(int(dow), dow)
                 schedule = f"Weekly on {day_name} at {int(hour):02d}:{int(minute):02d}"
             else:
@@ -1063,14 +1113,7 @@ def list_scheduled_jobs():
                     "line": line,
                 })
             elif "newsletter_watchdog.py" in line:
-                jobs.append({
-                    "type": "Watchdog",
-                    "subject": "Missed-job recovery",
-                    "schedule": "Hourly at :00",
-                    "recipients": [],
-                    "marker": "__watchdog__",
-                    "line": line,
-                })
+                continue
     except Exception:
         pass
     return jobs
@@ -1208,6 +1251,18 @@ def main():
     quick_mode = args.quick_subject is not None and args.subject is None
     is_interactive = args.subject is None and not quick_mode
 
+    if quick_mode or is_interactive:
+        print("=" * 50)
+        if quick_mode:
+            print("  Magent — Quick Mode (Microsoft Neural TTS)")
+        else:
+            print("  Magent — Newsletter Generator (Microsoft Neural TTS)")
+        print("=" * 50)
+        print()
+
+        display_and_manage_jobs()
+        print()
+
     if quick_mode:
         subject = args.quick_subject
         audio_opt = AUDIO_OPTIONS["1"]
@@ -1215,18 +1270,10 @@ def main():
         duration = 3
         recipients = [EMAIL_TO]
         period, schedule_time, day_of_week = None, None, None
-        print("=" * 50)
         print(f"  Quick mode: \"{subject}\"")
         print(f"  English | 0.75x speed | 3 min | {EMAIL_TO}")
         print("=" * 50)
     elif is_interactive:
-        print("=" * 50)
-        print("  Magent — Newsletter Generator (Microsoft Neural TTS)")
-        print("=" * 50)
-        print()
-
-        display_and_manage_jobs()
-        print()
 
         subject = input("Enter the subject of inquiry: ").strip()
         if not subject:
@@ -1291,7 +1338,12 @@ def main():
     print()
 
     all_results = fetch_all_sources(subject, refresh_sources=args.refresh_sources)
-    all_results = deduplicate_articles(all_results)
+
+    history = load_article_history(subject)
+    history_fps = get_history_fingerprints(history)
+    if history_fps:
+        print(f"Loaded {len(history_fps)} article fingerprints from previous {len(history)} day(s)")
+    all_results = deduplicate_articles(all_results, history_fps)
 
     print()
     print("Generating editorial summary...")
@@ -1325,6 +1377,13 @@ def main():
     total = sum(len(v["articles"]) for v in all_results.values())
     print(f"Newsletter saved: {filename}")
     print(f"Total articles: {total}")
+
+    # Save today's article fingerprints to history
+    new_fps = []
+    for data in all_results.values():
+        for art in data["articles"]:
+            new_fps.append(re.sub(r"[^a-z0-9]", "", art["title"].lower()))
+    save_article_history(subject, history, new_fps)
 
     # Send email
     if not args.no_email and recipients:
