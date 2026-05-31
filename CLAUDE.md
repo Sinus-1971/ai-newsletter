@@ -57,6 +57,15 @@ Same functionality as AgentGeneric.py but uses **Microsoft Edge neural TTS** (`e
 - Platform-independent — works on macOS, Linux, Windows (not macOS-only)
 - Cron entries tagged `# Magent:{subject}`
 
+**Magent-specific features (not in AgentGeneric):**
+- **Post-send audio strip** — after email is sent with audio attachment, base64 audio is stripped from the saved HTML file on disk (text/editorial preserved, saves disk space)
+- **Content similarity detection** — compares fetched articles against a content log from the last X days (configurable, default 7). Articles with >=60% keyword overlap are filtered out. If too many are filtered, searches for fresh content from alternative Google News queries
+- **Content log** — JSON database at `.source_cache/{subject}_content_log.json` storing article titles, summaries, sources, and keywords for each run. Auto-prunes entries older than HISTORY_MAX_DAYS (20)
+- **Focus prompt file** — a `.txt` or `.prompt` file in the script directory that guides editorial emphasis. Re-read from disk on every run, so scheduled cron jobs pick up edits without reconfiguring. Interactive mode lists available files for selection
+- **Lookback days** — configurable (1-30, default 7) how many days back to check for content overlap
+- CLI: `--subject`, `--recipients`, `--lang` (0/1/2/3), `--speed` (1/2/3), `--duration` (1-30), `--lookback-days` (1-30), `--focus-file "file.txt"`, `--no-email`, `--refresh-sources`
+- Interactive flow order: subject → audio → speed/duration → emails → schedule → **lookback days** → **focus file** → review & confirm
+
 ## 4. DeepSearch.py — Academic research digest
 
 Fetches from academic sources (arXiv, Semantic Scholar, PubMed, Google Scholar, research news) instead of RSS news. Produces a comprehensive research digest with:
@@ -84,7 +93,7 @@ python3 DeepSearch.py --subject "CRISPR" --recipients "a@b.com" --lang 1 --speed
 
 ## 5. newsletter_watchdog.py — Missed-job recovery
 
-Runs hourly via cron. Parses crontab for all newsletter jobs (ai_newsletter + AgentGeneric), checks if each job's expected output file exists for today, and re-runs any missed job.
+Runs hourly via cron. Parses crontab for all newsletter jobs (ai_newsletter + AgentGeneric + Magent), checks if each job's expected output file exists for today, and re-runs any missed job.
 
 **Logic:**
 - For daily jobs: checks every day
@@ -92,10 +101,14 @@ Runs hourly via cron. Parses crontab for all newsletter jobs (ai_newsletter + Ag
 - Only triggers if current time is past the job's scheduled time AND today's output file is missing
 - Runs the exact cron command, inheriting environment from `.env`
 - Tagged `# NewsletterWatchdog` in crontab
+- Detects output directory from the `cd` command in each cron entry (supports jobs in different directories)
 
 **Output files checked:**
 - `ai_newsletter.py` → `Sites_{YYYY-MM-DD}.html`
 - `AgentGeneric.py` → `{Subject}_{YYYY-MM-DD}.html`
+- `Magent.py` → `{Subject}_{YYYY-MM-DD}.html`
+
+**Cron markers recognized:** `# AgentGeneric:{subject}`, `# Magent:{subject}`, `ai_newsletter.py`
 
 ## Shared architecture
 All scripts use:
@@ -185,15 +198,20 @@ pip install feedparser requests anthropic python-dotenv edge-tts
 ## Files
 - `ai_newsletter.py` — AI-focused newsletter script
 - `AgentGeneric.py` — generic subject newsletter script (macOS TTS, interactive + CLI)
-- `Magent.py` — generic subject newsletter script (Microsoft neural TTS, interactive + CLI)
+- `Magent.py` — generic subject newsletter script (Microsoft neural TTS, interactive + CLI, content similarity, focus file, post-send audio strip)
 - `DeepSearch.py` — academic research digest (arXiv/Semantic Scholar/PubMed, 1000+ words, infographics, references)
-- `newsletter_watchdog.py` — hourly missed-job recovery script
+- `newsletter_watchdog.py` — hourly missed-job recovery script (supports AgentGeneric + Magent + ai_newsletter markers)
+- `Bgent2.py` — (secondary agent script)
+- `app1_generator.py`, `app2_processor.py`, `app3_supervisor.py` — orchestrator app trio
+- `PromptAI` — focus prompt file for AI newsletter (read by Magent.py at each scheduled run)
+- `QUICKSTART.md` — quick start guide
+- `README_THREE_APPS.md` — documentation for the three orchestrator apps
 - `AgentGenericClaudeSessionID.txt` — Claude Code session ID for continuity
 - `.env` — Gmail App Password and Anthropic API key (gitignored, DO NOT commit)
-- `.gitignore` — excludes `.env`, logs, generated HTML/audio files, cache
-- `.source_cache/` — cached source discovery results per subject (gitignored)
+- `.gitignore` — excludes `.env`, logs, generated HTML/audio/mp3 files, cache, .DS_Store
+- `.source_cache/` — cached source discovery results + content logs + article history per subject (gitignored)
 - `Sites_*.html` — AI newsletter output (gitignored)
-- `{Subject}_*.html` — AgentGeneric output (gitignored)
+- `{Subject}_*.html` — AgentGeneric/Magent output (gitignored)
 - `newsletter*.log` — cron output logs (gitignored)
 
 ## GitHub

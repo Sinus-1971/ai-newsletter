@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Magent — Subject-based newsletter generator with Microsoft Edge neural TTS.
+AgentGeneric — Subject-based newsletter generator.
 Asks for a subject, fetches articles from multiple sources, generates an
-AI editorial summary via Claude API, and produces a styled HTML newsletter
-with natural-sounding Microsoft neural voice narration.
+AI editorial summary via Claude API, and produces a styled HTML newsletter.
+Optionally schedules daily runs via cron.
 
 Setup:
   export GMAIL_APP_PASSWORD="your-app-password-here"
   export ANTHROPIC_API_KEY="your-anthropic-api-key"
-  pip install edge-tts
 """
 
 import feedparser
 import requests
 import anthropic
 from dotenv import load_dotenv
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from html import escape
 from urllib.parse import quote_plus
 import json
@@ -25,9 +24,7 @@ import smtplib
 import os
 import sys
 import subprocess
-import asyncio
 import base64
-import edge_tts
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -50,18 +47,18 @@ HEADERS = {
 MAX_ARTICLES_PER_SOURCE = 5
 
 AUDIO_OPTIONS = {
-    "0": {"name": "No audio",  "voice": None,                  "lang_name": None,      "code": "0"},
-    "1": {"name": "English",   "voice": "en-US-AriaNeural",    "lang_name": "English", "code": "1"},
-    "2": {"name": "Turkish",   "voice": "tr-TR-EmelNeural",    "lang_name": "Turkish", "code": "2"},
-    "3": {"name": "French",    "voice": "fr-FR-DeniseNeural",  "lang_name": "French",  "code": "3"},
+    "0": {"name": "No audio",  "voice": None,       "lang_name": None,      "code": "0"},
+    "1": {"name": "English",   "voice": "Samantha",  "lang_name": "English", "code": "1"},
+    "2": {"name": "Turkish",   "voice": "Yelda",     "lang_name": "Turkish", "code": "2"},
+    "3": {"name": "French",    "voice": "Thomas",    "lang_name": "French",  "code": "3"},
 }
 
 AUDIO_SPEED = 1.0
 
 SPEED_OPTIONS = {
-    "1": 0.75,
+    "1": 0.85,
     "2": 1.0,
-    "3": 1.25,
+    "3": 1.15,
 }
 
 RSS_PATTERNS = ["/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/feeds/posts/default"]
@@ -301,25 +298,6 @@ def fetch_rss(source):
 
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".source_cache")
 CACHE_MAX_AGE_DAYS = 7
-HISTORY_MAX_DAYS = 20
-
-STOP_WORDS = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can", "need", "must",
-    "it", "its", "this", "that", "these", "those", "you", "he", "she",
-    "we", "they", "me", "him", "her", "us", "them", "my", "your", "his",
-    "our", "their", "what", "which", "who", "whom", "how", "when", "where",
-    "why", "not", "no", "nor", "as", "if", "so", "than", "too", "very",
-    "just", "about", "above", "after", "again", "all", "also", "any",
-    "because", "before", "between", "both", "each", "few", "get", "got",
-    "here", "into", "more", "most", "new", "now", "only", "other", "out",
-    "over", "own", "said", "same", "some", "still", "such", "take", "tell",
-    "then", "there", "through", "under", "up", "upon", "use", "used",
-    "using", "via", "well", "while", "yet", "says", "report", "reports",
-    "according", "article", "articles", "news", "latest", "today", "week",
-}
 
 
 def get_cache_path(subject):
@@ -358,46 +336,6 @@ def save_sources_cache(subject, sources):
     print(f"Sources cached to {path}")
 
 
-def get_history_path(subject):
-    safe = sanitize_filename(subject)
-    return os.path.join(CACHE_DIR, f"{safe}_history.json")
-
-
-def load_article_history(subject):
-    path = get_history_path(subject)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r") as f:
-            history = json.load(f)
-        cutoff = (datetime.now() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
-        pruned = {d: fps for d, fps in history.items() if d >= cutoff}
-        return pruned
-    except Exception:
-        return {}
-
-
-def save_article_history(subject, history, new_fingerprints):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
-    history[today] = list(set(history.get(today, []) + new_fingerprints))
-    cutoff = (datetime.now() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
-    history = {d: fps for d, fps in history.items() if d >= cutoff}
-    path = get_history_path(subject)
-    with open(path, "w") as f:
-        json.dump(history, f)
-    total = sum(len(v) for v in history.values())
-    days = len(history)
-    print(f"Article history updated: {total} fingerprints across {days} day(s)")
-
-
-def get_history_fingerprints(history):
-    all_fps = set()
-    for fps in history.values():
-        all_fps.update(fps)
-    return all_fps
-
-
 def fetch_all_sources(subject, refresh_sources=False):
     cached = None if refresh_sources else load_cached_sources(subject)
 
@@ -426,12 +364,9 @@ def fetch_all_sources(subject, refresh_sources=False):
     return all_results
 
 
-def deduplicate_articles(all_results, history_fps=None):
-    """Remove duplicate articles across sources and against previous days."""
+def deduplicate_articles(all_results):
+    """Remove duplicate articles across sources based on title similarity."""
     seen_titles = set()
-    if history_fps:
-        seen_titles.update(history_fps)
-    skipped_history = 0
     for source_name, data in all_results.items():
         unique = []
         for art in data["articles"]:
@@ -439,15 +374,11 @@ def deduplicate_articles(all_results, history_fps=None):
             if normalized not in seen_titles:
                 seen_titles.add(normalized)
                 unique.append(art)
-            elif history_fps and normalized in history_fps:
-                skipped_history += 1
         data["articles"] = unique
-    if skipped_history:
-        print(f"  Filtered {skipped_history} articles already seen in previous newsletters")
     return all_results
 
 
-def generate_editorial(all_results, subject, run_date, lang_name="English", target_words=600, focus_prompt=""):
+def generate_editorial(all_results, subject, run_date, lang_name="English", target_words=600):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("[WARNING] ANTHROPIC_API_KEY not set — skipping editorial summary.")
@@ -467,10 +398,6 @@ def generate_editorial(all_results, subject, run_date, lang_name="English", targ
 
     lang_instruction = f"- Write entirely in {lang_name}" if lang_name != "English" else "- Write in English"
 
-    focus_instruction = ""
-    if focus_prompt:
-        focus_instruction = f"\n- SPECIAL FOCUS: {focus_prompt}. Prioritize and emphasize content related to this focus area throughout the editorial."
-
     if target_words <= 600:
         length_instruction = "Write a 5-6 paragraph editorial summary"
     elif target_words <= 1500:
@@ -484,7 +411,7 @@ def generate_editorial(all_results, subject, run_date, lang_name="English", targ
 Based on today's ({run_date}) articles below, {length_instruction.lower()}.
 
 Rules:
-{lang_instruction}{focus_instruction}
+{lang_instruction}
 - Target approximately {target_words} words
 - Write in an engaging, professional journalistic tone
 - Identify the major themes and trends across all articles related to {subject}
@@ -529,25 +456,40 @@ def generate_audio(editorial_html, output_path, voice=None, speed=AUDIO_SPEED):
     if not plain_text.strip():
         return None
 
-    rate_pct = int((speed - 1.0) * 100)
-    rate_str = f"{rate_pct:+d}%"
+    txt_path = output_path.replace(".m4a", ".txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(plain_text)
 
-    async def _generate():
-        communicate = edge_tts.Communicate(plain_text, voice, rate=rate_str)
-        await communicate.save(output_path)
+    rate = int(200 * speed)
 
     try:
-        asyncio.run(_generate())
-        print(f"Audio saved: {output_path} (voice: {voice}, speed: {speed}x)")
+        subprocess.run(
+            ["say", "-v", voice, "-r", str(rate), "-o", output_path, "-f", txt_path],
+            check=True, timeout=180,
+        )
+        os.remove(txt_path)
+        compressed = output_path + ".tmp"
+        try:
+            subprocess.run(
+                ["afconvert", "-f", "m4af", "-d", "aac", "-b", "64000", output_path, compressed],
+                check=True, timeout=60,
+            )
+            os.replace(compressed, output_path)
+        except Exception:
+            if os.path.exists(compressed):
+                os.remove(compressed)
+        print(f"Audio saved: {output_path} (speed: {speed}x)")
         return output_path
     except Exception as e:
         print(f"[WARNING] Audio generation failed: {e}")
+        if os.path.exists(txt_path):
+            os.remove(txt_path)
         return None
 
 
 def audio_to_data_uri(audio_bytes):
     b64 = base64.b64encode(audio_bytes).decode("ascii")
-    return f"data:audio/mpeg;base64,{b64}"
+    return f"data:audio/mp4;base64,{b64}"
 
 
 def generate_html(all_results, subject, run_date, editorial_html="", audio_src=None):
@@ -816,7 +758,7 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_src=N
 
         {f'''<div class="editorial">
             <h2>Editorial Summary</h2>
-            {f'<div class="audio-player"><audio controls><source src="{audio_src}" type="audio/mpeg">Your browser does not support audio.</audio></div>' if audio_src else ''}
+            {f'<div class="audio-player"><audio controls><source src="{audio_src}" type="audio/mp4">Your browser does not support audio.</audio></div>' if audio_src else ''}
             {editorial_html}
         </div>''' if editorial_html else ''}
 
@@ -825,7 +767,7 @@ def generate_html(all_results, subject, run_date, editorial_html="", audio_src=N
         {sections_html}
 
         <footer>
-            Generated on {run_date} by Magent Newsletter Generator
+            Generated on {run_date} by AgentGeneric Newsletter Generator
         </footer>
     </div>
 </body>
@@ -860,9 +802,9 @@ def ask_speed():
     print()
     print("Narration speed:")
     print()
-    print("  1 — 0.75x (slow)")
+    print("  1 — 0.85x (slow)")
     print("  2 — 1x (normal, default)")
-    print("  3 — 1.25x (fast)")
+    print("  3 — 1.15x (fast)")
     print()
     choice = input("  Select (1-3, default: 2): ").strip()
     if not choice:
@@ -978,7 +920,7 @@ def send_email(html_content, subject, run_date, recipients, audio_bytes=None, au
     msg.attach(alt_part)
 
     if audio_bytes and audio_filename:
-        audio_part = MIMEBase("audio", "mpeg")
+        audio_part = MIMEBase("audio", "mp4")
         audio_part.set_payload(audio_bytes)
         encoders.encode_base64(audio_part)
         audio_part.add_header("Content-Disposition", "attachment", filename=audio_filename)
@@ -998,231 +940,6 @@ def send_email(html_content, subject, run_date, recipients, audio_bytes=None, au
 
 def sanitize_filename(subject):
     return re.sub(r"[^a-zA-Z0-9_-]", "_", subject).strip("_")
-
-
-def extract_keywords(text):
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
-    return set(w for w in words if w not in STOP_WORDS)
-
-
-def content_similarity(keywords1, keywords2):
-    if not keywords1 or not keywords2:
-        return 0.0
-    intersection = keywords1 & keywords2
-    union = keywords1 | keywords2
-    return len(intersection) / len(union) if union else 0.0
-
-
-def get_content_log_path(subject):
-    safe = sanitize_filename(subject)
-    return os.path.join(CACHE_DIR, f"{safe}_content_log.json")
-
-
-def load_content_log(subject, lookback_days=7):
-    path = get_content_log_path(subject)
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, "r") as f:
-            log = json.load(f)
-        cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-        entries = [e for e in log if e.get("date", "") >= cutoff]
-        return entries
-    except Exception:
-        return []
-
-
-def save_content_log(subject, all_results, run_date):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    path = get_content_log_path(subject)
-
-    existing = []
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                existing = json.load(f)
-        except Exception:
-            existing = []
-
-    today_entries = []
-    for source_name, data in all_results.items():
-        for art in data["articles"]:
-            keywords = list(extract_keywords(art["title"] + " " + art.get("summary", "")))
-            today_entries.append({
-                "date": run_date,
-                "source": source_name,
-                "title": art["title"],
-                "link": art.get("link", ""),
-                "summary": art.get("summary", ""),
-                "keywords": keywords[:30],
-            })
-
-    all_entries = existing + today_entries
-    cutoff = (datetime.now() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
-    all_entries = [e for e in all_entries if e.get("date", "") >= cutoff]
-
-    with open(path, "w") as f:
-        json.dump(all_entries, f, indent=2)
-
-    print(f"Content log updated: {len(today_entries)} new entries, {len(all_entries)} total")
-
-
-def filter_similar_content(all_results, content_log, subject, threshold=0.6):
-    if not content_log:
-        return all_results, 0, 0
-
-    logged_keywords = []
-    for entry in content_log:
-        kw = set(entry.get("keywords", []))
-        if not kw and entry.get("title"):
-            kw = extract_keywords(entry["title"] + " " + entry.get("summary", ""))
-        if kw:
-            logged_keywords.append(kw)
-
-    if not logged_keywords:
-        return all_results, 0, 0
-
-    similar_count = 0
-    for source_name, data in all_results.items():
-        filtered = []
-        for art in data["articles"]:
-            art_kw = extract_keywords(art["title"] + " " + art.get("summary", ""))
-            is_similar = any(
-                content_similarity(art_kw, prev_kw) >= threshold
-                for prev_kw in logged_keywords
-            )
-            if is_similar:
-                similar_count += 1
-            else:
-                filtered.append(art)
-        data["articles"] = filtered
-
-    remaining = sum(len(d["articles"]) for d in all_results.values())
-    fresh_added = 0
-    if similar_count > 0 and remaining < 5:
-        print(f"  Too many similar articles filtered — searching for fresh content...")
-        encoded = quote_plus(f"{subject} latest developments")
-        fresh_source = {
-            "name": f"Fresh Search — {subject}",
-            "url": f"https://news.google.com/rss/search?q={encoded}+when:1d&hl=en&gl=US&ceid=US:en",
-            "site_url": f"https://news.google.com/search?q={encoded}",
-        }
-        fresh_articles = fetch_rss(fresh_source)
-        truly_fresh = []
-        for art in fresh_articles:
-            art_kw = extract_keywords(art["title"] + " " + art.get("summary", ""))
-            is_similar = any(
-                content_similarity(art_kw, prev_kw) >= threshold
-                for prev_kw in logged_keywords
-            )
-            if not is_similar:
-                truly_fresh.append(art)
-        if truly_fresh:
-            all_results[fresh_source["name"]] = {
-                "articles": truly_fresh[:MAX_ARTICLES_PER_SOURCE],
-                "site_url": fresh_source["site_url"],
-            }
-            fresh_added = len(truly_fresh[:MAX_ARTICLES_PER_SOURCE])
-            print(f"  Added {fresh_added} fresh articles from alternative search")
-
-    return all_results, similar_count, fresh_added
-
-
-def ask_lookback_days():
-    print()
-    print("Content overlap detection — check previous newsletters:")
-    print()
-    choice = input("  How many days to look back? (1-30, default: 7): ").strip()
-    if not choice:
-        days = 7
-    else:
-        try:
-            days = int(choice)
-            days = max(1, min(30, days))
-        except ValueError:
-            print(f"  Invalid input. Using 7 days.")
-            days = 7
-    print(f"  Lookback: {days} days")
-    return days
-
-
-def load_focus_file(filepath):
-    if not filepath:
-        return ""
-    full_path = filepath if os.path.isabs(filepath) else os.path.join(SCRIPT_DIR, filepath)
-    if not os.path.exists(full_path):
-        print(f"[WARNING] Focus file not found: {full_path}")
-        return ""
-    try:
-        with open(full_path, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-        if content:
-            print(f"  Focus loaded from: {os.path.basename(full_path)} ({len(content)} chars)")
-        return content
-    except Exception as e:
-        print(f"[WARNING] Could not read focus file: {e}")
-        return ""
-
-
-def ask_focus_file():
-    print()
-    print("Focus prompt file — a .txt file in the script directory that guides")
-    print("  what to look for in the newsletter. The file is re-read on each")
-    print("  scheduled run, so you can update it between runs.")
-    print()
-
-    prompt_files = sorted(
-        f for f in os.listdir(SCRIPT_DIR)
-        if f.endswith((".txt", ".prompt")) and os.path.isfile(os.path.join(SCRIPT_DIR, f))
-    )
-
-    if prompt_files:
-        print("  Available prompt files:")
-        for i, fname in enumerate(prompt_files, 1):
-            size = os.path.getsize(os.path.join(SCRIPT_DIR, fname))
-            print(f"    {i}. {fname} ({size} bytes)")
-        print()
-        choice = input("  Select number, type a filename, or press Enter to skip: ").strip()
-        if not choice:
-            print(f"  Focus: none (general coverage)")
-            return ""
-        if choice.isdigit() and 1 <= int(choice) <= len(prompt_files):
-            selected = prompt_files[int(choice) - 1]
-            content = load_focus_file(selected)
-            if content:
-                preview = content[:80] + ("..." if len(content) > 80 else "")
-                print(f"  Preview: {preview}")
-            return selected
-        else:
-            return choice
-    else:
-        print("  No .txt or .prompt files found in script directory.")
-        choice = input("  Enter a filename to use (or press Enter to skip): ").strip()
-        if not choice:
-            print(f"  Focus: none (general coverage)")
-        return choice
-
-
-def strip_audio_from_saved_html(filename):
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            html = f.read()
-
-        modified = re.sub(
-            r'<div class="audio-player">.*?</div>',
-            '<p style="color: #80f0e0; font-style: italic; margin-bottom: 14px;">'
-            'Audio was sent via email attachment.</p>',
-            html, flags=re.DOTALL,
-        )
-
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(modified)
-
-        saved = len(html) - len(modified)
-        if saved > 0:
-            print(f"Audio stripped from saved HTML (saved {saved // 1024} KB)")
-    except Exception as e:
-        print(f"[WARNING] Could not strip audio from HTML: {e}")
 
 
 def ask_schedule():
@@ -1258,7 +975,7 @@ def ask_schedule():
     return period, (hour, minute), day_of_week
 
 
-def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lang_code="en", lookback_days=7, focus_file=""):
+def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lang_code="en"):
     safe_name = sanitize_filename(subject)
     script_path = os.path.abspath(__file__)
     python_path = sys.executable
@@ -1273,15 +990,10 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lan
     else:
         cron_schedule = f"{minute} {hour} * * *"
 
-    extra_args = f'--lookback-days {lookback_days}'
-    if focus_file:
-        extra_args += f' --focus-file "{focus_file}"'
-
     cron_line = (
         f'{cron_schedule} cd {SCRIPT_DIR} && '
         f'{python_path} {script_path} '
         f'--subject "{subject}" --recipients "{recipients_arg}" --lang "{lang_code}" '
-        f'{extra_args} '
         f'>> {log_path} 2>&1'
     )
 
@@ -1289,7 +1001,7 @@ def setup_cron(subject, recipients, period, schedule_time, day_of_week=None, lan
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         existing = result.stdout.strip()
 
-        marker = f'Magent:{safe_name}'
+        marker = f'AgentGeneric:{safe_name}'
         cron_entry = f'{cron_line} # {marker}'
 
         lines = existing.split("\n") if existing else []
@@ -1332,27 +1044,25 @@ def list_scheduled_jobs():
             rest = " ".join(parts[5:])
 
             # Determine schedule description
-            if hour == "*" or minute == "*":
-                schedule = "Hourly at :00"
-            elif dow != "*" and dom == "*":
+            if dow != "*" and dom == "*":
                 day_name = day_names.get(int(dow), dow)
                 schedule = f"Weekly on {day_name} at {int(hour):02d}:{int(minute):02d}"
             else:
                 schedule = f"Daily at {int(hour):02d}:{int(minute):02d}"
 
             # Parse marker
-            marker_match = re.search(r"# (?:Magent|AgentGeneric):(.+)$", line)
+            marker_match = re.search(r"# AgentGeneric:(.+)$", line)
             if marker_match:
                 subject = marker_match.group(1).replace("_", " ")
+                # Extract recipients if present
                 recip_match = re.search(r'--recipients\s+"([^"]+)"', line)
                 recipients = recip_match.group(1).split(",") if recip_match else []
-                job_type = "Magent" if "Magent.py" in line else "AgentGeneric"
                 jobs.append({
-                    "type": job_type,
+                    "type": "AgentGeneric",
                     "subject": subject,
                     "schedule": schedule,
                     "recipients": recipients,
-                    "marker": f"Magent:{marker_match.group(1)}",
+                    "marker": f"AgentGeneric:{marker_match.group(1)}",
                     "line": line,
                 })
             elif "ai_newsletter.py" in line:
@@ -1365,7 +1075,14 @@ def list_scheduled_jobs():
                     "line": line,
                 })
             elif "newsletter_watchdog.py" in line:
-                continue
+                jobs.append({
+                    "type": "Watchdog",
+                    "subject": "Missed-job recovery",
+                    "schedule": "Hourly at :00",
+                    "recipients": [],
+                    "marker": "__watchdog__",
+                    "line": line,
+                })
     except Exception:
         pass
     return jobs
@@ -1454,7 +1171,7 @@ def display_and_manage_jobs():
         return False
 
 
-def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name="English", audio_name="None", speed=AUDIO_SPEED, duration=3, lookback_days=7, focus_file=""):
+def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name="English", audio_name="None", speed=AUDIO_SPEED, duration=3):
     day_names = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"}
 
     print()
@@ -1468,11 +1185,6 @@ def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_
     if audio_name != "No audio":
         print(f"  Speed:        {speed}x")
         print(f"  Duration:     {duration} min")
-    print(f"  Lookback:     {lookback_days} days")
-    if focus_file:
-        print(f"  Focus file:   {focus_file}")
-    else:
-        print(f"  Focus file:   none (general coverage)")
     print()
     print(f"  Recipients:   ({len(recipients)})")
     for email in recipients:
@@ -1494,48 +1206,26 @@ def print_summary(subject, recipients, period, schedule_time, day_of_week, lang_
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Magent — Subject-based newsletter generator with Microsoft neural TTS")
-    parser.add_argument("quick_subject", nargs="?", type=str, default=None, help="Subject for quick mode (auto-approved, English, slow speed, emailed to default recipient)")
+    parser = argparse.ArgumentParser(description="AgentGeneric — Subject-based newsletter generator")
     parser.add_argument("--subject", type=str, help="Subject to research (non-interactive mode)")
     parser.add_argument("--recipients", type=str, help="Comma-separated recipient emails (non-interactive)")
     parser.add_argument("--lang", type=str, default="1", help="Audio option: 0=none, 1=English, 2=Turkish, 3=French")
-    parser.add_argument("--speed", type=str, default="2", help="Audio speed: 1=0.75x, 2=1x (default), 3=1.25x")
+    parser.add_argument("--speed", type=str, default="2", help="Audio speed: 1=0.85x, 2=1x (default), 3=1.15x")
     parser.add_argument("--duration", type=int, default=3, help="Audio narration duration in minutes (1-30, default: 3)")
-    parser.add_argument("--lookback-days", type=int, default=7, help="Days to look back for duplicate detection (1-30, default: 7)")
-    parser.add_argument("--focus-file", type=str, default="", help="Path to a .txt prompt file that guides editorial focus (re-read each run)")
     parser.add_argument("--refresh-sources", action="store_true", help="Force rediscovery of sources (ignore cache)")
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     args = parser.parse_args()
 
-    quick_mode = args.quick_subject is not None and args.subject is None
-    is_interactive = args.subject is None and not quick_mode
+    is_interactive = args.subject is None
 
-    if quick_mode or is_interactive:
+    if is_interactive:
         print("=" * 50)
-        if quick_mode:
-            print("  Magent — Quick Mode (Microsoft Neural TTS)")
-        else:
-            print("  Magent — Newsletter Generator (Microsoft Neural TTS)")
+        print("  AgentGeneric — Newsletter Generator")
         print("=" * 50)
         print()
 
         display_and_manage_jobs()
         print()
-
-    if quick_mode:
-        subject = args.quick_subject
-        audio_opt = AUDIO_OPTIONS["1"]
-        speed = SPEED_OPTIONS["1"]
-        duration = 3
-        lookback_days = args.lookback_days
-        focus_file = args.focus_file
-        recipients = [EMAIL_TO]
-        period, schedule_time, day_of_week = None, None, None
-        print(f"  Quick mode: \"{subject}\"")
-        focus_label = os.path.basename(focus_file) if focus_file else "none"
-        print(f"  English | 0.75x speed | 3 min | lookback {lookback_days}d | focus: {focus_label} | {EMAIL_TO}")
-        print("=" * 50)
-    elif is_interactive:
 
         subject = input("Enter the subject of inquiry: ").strip()
         if not subject:
@@ -1559,39 +1249,30 @@ def main():
     lang_name = audio_opt["lang_name"] or "English"
     voice = audio_opt["voice"]
 
-    if not quick_mode:
-        # Determine recipients
-        if args.recipients:
-            recipients = [e.strip() for e in args.recipients.split(",") if e.strip()]
-        elif is_interactive:
-            print()
-            recipients = collect_emails()
-            if not recipients:
-                print("  No valid emails entered. Newsletter will be saved but not emailed.")
-        else:
-            recipients = [EMAIL_TO]
+    # Determine recipients
+    if args.recipients:
+        recipients = [e.strip() for e in args.recipients.split(",") if e.strip()]
+    elif is_interactive:
+        print()
+        recipients = collect_emails()
+        if not recipients:
+            print("  No valid emails entered. Newsletter will be saved but not emailed.")
+    else:
+        recipients = [EMAIL_TO]
 
-        # Ask about scheduling (interactive only)
-        period, schedule_time, day_of_week = None, None, None
-        if is_interactive and recipients:
-            print()
-            period, schedule_time, day_of_week = ask_schedule()
+    # Ask about scheduling (interactive only)
+    period, schedule_time, day_of_week = None, None, None
+    if is_interactive and recipients:
+        print()
+        period, schedule_time, day_of_week = ask_schedule()
 
-        # Ask lookback days and focus file (interactive only)
-        if is_interactive:
-            lookback_days = ask_lookback_days()
-            focus_file = ask_focus_file()
-        else:
-            lookback_days = max(1, min(30, args.lookback_days))
-            focus_file = args.focus_file
-
-        # Show review summary and ask for confirmation (interactive only)
-        if is_interactive:
-            print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name, audio_opt["name"], speed, duration, lookback_days, focus_file)
-            confirm = input("  Proceed? (y/n): ").strip().lower()
-            if confirm not in ("y", "yes"):
-                print("\n  Cancelled.")
-                sys.exit(0)
+    # Show review summary and ask for confirmation (interactive only)
+    if is_interactive:
+        print_summary(subject, recipients, period, schedule_time, day_of_week, lang_name, audio_opt["name"], speed, duration)
+        confirm = input("  Proceed? (y/n): ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("\n  Cancelled.")
+            sys.exit(0)
 
     # Fetch and generate
     run_date = datetime.now().strftime("%Y-%m-%d")
@@ -1608,43 +1289,17 @@ def main():
     print()
 
     all_results = fetch_all_sources(subject, refresh_sources=args.refresh_sources)
-
-    history = load_article_history(subject)
-    history_fps = get_history_fingerprints(history)
-    if history_fps:
-        print(f"Loaded {len(history_fps)} article fingerprints from previous {len(history)} day(s)")
-    all_results = deduplicate_articles(all_results, history_fps)
-
-    # Content similarity check against previous newsletters
-    print()
-    print(f"Checking content similarity against last {lookback_days} day(s)...")
-    content_log = load_content_log(subject, lookback_days)
-    if content_log:
-        print(f"  Loaded {len(content_log)} logged articles from previous newsletters")
-        all_results, sim_count, fresh_count = filter_similar_content(
-            all_results, content_log, subject, threshold=0.6,
-        )
-        if sim_count:
-            print(f"  Filtered {sim_count} similar articles (>=60% keyword overlap)")
-        else:
-            print(f"  No similar articles found — all content is fresh")
-    else:
-        print(f"  No previous content log — skipping similarity check")
-
-    # Read focus prompt file (re-read each run so cron picks up edits)
-    focus_prompt = ""
-    if focus_file:
-        focus_prompt = load_focus_file(focus_file)
+    all_results = deduplicate_articles(all_results)
 
     print()
     print("Generating editorial summary...")
     target_words = int(duration * 200 * speed)
-    editorial_html = generate_editorial(all_results, subject, run_date, lang_name, target_words, focus_prompt)
+    editorial_html = generate_editorial(all_results, subject, run_date, lang_name, target_words)
 
     print("Generating audio narration...")
     audio_path = os.path.join(
         SCRIPT_DIR,
-        f"{safe_name}_{run_date}.mp3",
+        f"{safe_name}_{run_date}.m4a",
     )
     audio_file = generate_audio(editorial_html, audio_path, voice, speed)
 
@@ -1669,30 +1324,15 @@ def main():
     print(f"Newsletter saved: {filename}")
     print(f"Total articles: {total}")
 
-    # Save today's article fingerprints to history
-    new_fps = []
-    for data in all_results.values():
-        for art in data["articles"]:
-            new_fps.append(re.sub(r"[^a-z0-9]", "", art["title"].lower()))
-    save_article_history(subject, history, new_fps)
-
-    # Save content log (sources + keywords for similarity detection)
-    save_content_log(subject, all_results, run_date)
-
     # Send email
-    email_sent = False
     if not args.no_email and recipients:
         print()
-        email_sent = send_email(html, subject, run_date, recipients, audio_bytes, audio_filename)
-
-    # Strip audio from saved HTML after email send (keep text, save disk space)
-    if email_sent and audio_bytes:
-        strip_audio_from_saved_html(filename)
+        send_email(html, subject, run_date, recipients, audio_bytes, audio_filename)
 
     # Set up cron if periodic (interactive only)
     if is_interactive and period and schedule_time and recipients:
         print()
-        setup_cron(subject, recipients, period, schedule_time, day_of_week, audio_opt["code"], lookback_days, focus_file)
+        setup_cron(subject, recipients, period, schedule_time, day_of_week, audio_opt["code"])
 
     print("\nDone!")
 

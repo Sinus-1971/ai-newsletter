@@ -45,23 +45,30 @@ def parse_cron_jobs():
                 continue
             command = m.group(1)
 
-            marker_match = re.search(r"# AgentGeneric:(.+)$", line)
+            marker_match = re.search(r"# (AgentGeneric|Magent):(.+)$", line)
             if marker_match:
-                subject_safe = marker_match.group(1)
+                job_type = marker_match.group(1)
+                subject_safe = marker_match.group(2)
                 subject_match = re.search(r'--subject\s+"([^"]+)"', line)
                 subject = subject_match.group(1) if subject_match else subject_safe.replace("_", " ")
                 safe = sanitize_filename(subject)
+                # Determine output directory from cd command in cron line
+                cd_match = re.search(r"cd\s+(\S+)", command)
+                output_dir = cd_match.group(1) if cd_match else SCRIPT_DIR
                 jobs.append({
-                    "type": "AgentGeneric",
+                    "type": job_type,
                     "subject": subject,
                     "safe_name": safe,
                     "hour": int(hour),
                     "minute": int(minute),
                     "dow": dow,
                     "output_pattern": f"{safe}_{{date}}.html",
+                    "output_dir": output_dir,
                     "command": command,
                 })
             elif "ai_newsletter.py" in line:
+                cd_match = re.search(r"cd\s+(\S+)", command)
+                output_dir = cd_match.group(1) if cd_match else SCRIPT_DIR
                 jobs.append({
                     "type": "AI Newsletter",
                     "subject": "AI",
@@ -70,6 +77,7 @@ def parse_cron_jobs():
                     "minute": int(minute),
                     "dow": dow,
                     "output_pattern": "Sites_{date}.html",
+                    "output_dir": output_dir,
                     "command": command,
                 })
     except Exception as e:
@@ -90,7 +98,8 @@ def should_have_run(job, now):
 
 def output_exists(job, today_str):
     filename = job["output_pattern"].format(date=today_str)
-    return os.path.exists(os.path.join(SCRIPT_DIR, filename))
+    output_dir = job.get("output_dir", SCRIPT_DIR)
+    return os.path.exists(os.path.join(output_dir, filename))
 
 
 def run_missed_job(job):
